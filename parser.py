@@ -291,7 +291,115 @@ class ParserService:
                 await browser.close()
 
     async def _solve_mesh(self, user, test_url, status_callback, screenshot_callback):
-        return "⚠️ Модуль МЭШ временно недоступен."
+        """
+        Решает тесты МЭШ / Госуслуги через Playwright.
+        """
+        async with async_playwright() as p:
+            # Запускаем браузер с эмуляцией мобильного устройства для обхода некоторых защит
+            browser = await p.chromium.launch(headless=True)
+            context = await browser.new_context(
+                viewport={'width': 1280, 'height': 720},
+                user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Safari/537.36'
+            )
+            page = await context.new_page()
+            
+            try:
+                if status_callback: await status_callback("🌐 Перехожу к тесту МЭШ...")
+                await page.goto(test_url, timeout=90000, wait_until="networkidle")
+                await asyncio.sleep(5)
+                
+                # Если перекинуло на Госуслуги — пробуем найти кнопку входа или подождать
+                if "gosuslugi.ru" in page.url:
+                    if status_callback: await status_callback("🔑 Требуется вход через Госуслуги...")
+                    # Здесь в идеале нужно уметь подкидывать куки или ждать, но пока просто заскриншотим
+                    if screenshot_callback:
+                        path = f"tmp/mesh_auth_{user['user_id']}.png"
+                        await page.screenshot(path=path)
+                        await screenshot_callback(path)
+                    
+                    # Пытаемся найти кнопку "Войти" или "Продолжить"
+                    login_btn = await page.query_selector("button:has-text('Войти'), .btn-login, button:has-text('Продолжить')")
+                    if login_btn:
+                        await login_btn.click()
+                        await asyncio.sleep(5)
+
+                # Ищем кнопку "Начать тест"
+                start_btn = await page.query_selector("button:has-text('Начать'), button:has-text('Приступить'), .start-btn")
+                if start_btn:
+                    if status_callback: await status_callback("🚀 Начинаю выполнение...")
+                    await start_btn.click()
+                    await asyncio.sleep(3)
+                else:
+                    # Если кнопки нет, возможно мы уже в тесте или застряли на логине
+                    if status_callback: await status_callback("⚠️ Не вижу кнопку старта. Пробую найти вопросы...")
+                
+                q_num = 0
+                while True:
+                    # Проверяем, не закончился ли тест (наличие результатов)
+                    final_score = await page.query_selector(".result-score, .final-score, :has-text('Результат')")
+                    if final_score:
+                        res_text = await final_score.inner_text()
+                        return f"✅ Тест завершен! {res_text}"
+                    
+                    q_num += 1
+                    if q_num > 50: break # Страховка
+                    
+                    # Ищем текст вопроса
+                    q_elem = await page.wait_for_selector(".question-text, .q-title, h3, .test-question", timeout=15000)
+                    if not q_elem: 
+                        if status_callback: await status_callback("🏁 Вопросы закончились или не найдены.")
+                        break
+                        
+                    question_text = await q_elem.inner_text()
+                    if status_callback: await status_callback(f"🤔 Вопрос {q_num}: {question_text[:30]}...")
+                    
+                    # Ищем варианты ответов
+                    options_elements = await page.query_selector_all(".answer-item, .option, label, .choice-item")
+                    options_texts = []
+                    for el in options_elements:
+                        txt = await el.inner_text()
+                        if txt.strip(): options_texts.append(txt.strip())
+                    
+                    if not options_elements:
+                        if status_callback: await status_callback("ℹ️ Поле свободного ввода или нет вариантов.")
+                        # Тут можно добавить логику для ввода текста
+                        break
+
+                    # Спрашиваем ИИ
+                    ai_res = await self.ai.get_answer(question_text, options_texts)
+                    ans_val = ai_res.get("answer")
+                    
+                    idx = self._match_index(ans_val, options_texts)
+                    if idx != -1:
+                        await options_elements[idx].click()
+                        await asyncio.sleep(1)
+                    
+                    # Кликаем "Далее" или "Ответить"
+                    next_btn = await page.query_selector("button:has-text('Далее'), button:has-text('Ответить'), .next-btn")
+                    if next_btn:
+                        await next_btn.click()
+                        await asyncio.sleep(2)
+                    else:
+                        await page.keyboard.press("Enter")
+                        await asyncio.sleep(2)
+
+                # Итоговый скриншот
+                if screenshot_callback:
+                    path = f"tmp/mesh_res_{user['user_id']}.png"
+                    await page.screenshot(path=path)
+                    await screenshot_callback(path)
+                
+                return "✅ Тест выполнен! Проверьте результат в дневнике."
+                
+            except Exception as e:
+                logger.error(f"MESH solver error: {e}")
+                if screenshot_callback:
+                    path = f"tmp/mesh_error_{user['user_id']}.png"
+                    await page.screenshot(path=path)
+                    await screenshot_callback(path)
+                return f"❌ Ошибка при решении МЭШ: {str(e)[:100]}"
+            finally:
+                await browser.close()
 
     def _match_index(self, ai_val, options):
         if isinstance(ai_val, int):
