@@ -5,7 +5,7 @@ from io import BytesIO
 
 from dotenv import load_dotenv
 from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeout
-from telegram import Update
+from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -23,12 +23,48 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-WAITING_URL, WAITING_LASTNAME, WAITING_FIRSTNAME, WAITING_CLASS, WAITING_AUTH = range(5)
+WAITING_ACTION, WAITING_URL, WAITING_TOKEN, WAITING_LASTNAME, WAITING_FIRSTNAME, WAITING_CLASS, WAITING_AUTH = range(7)
+
+MAIN_MENU_KBD = [
+    ["📄 Получить ответы", "🤖 Авторешение"],
+    ["💻 Мои ЦДЗ тесты", "⚙️ Настройки"],
+    ["🆘 Помощь", "❌ Отмена"]
+]
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     await _cleanup_browser(context)
-    await update.message.reply_text("Введите URL страницы с тестом")
+    reply_markup = ReplyKeyboardMarkup(MAIN_MENU_KBD, resize_keyboard=True)
+    await update.message.reply_text(
+        "👋 Привет! Я помогу тебе с решением ЦДЗ.\nВыбери действие в меню:",
+        reply_markup=reply_markup
+    )
+    return WAITING_ACTION
+
+async def handle_menu_click(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    text = update.message.text
+    if text == "🤖 Авторешение" or text == "📄 Получить ответы":
+        await update.message.reply_text("Введите URL страницы с тестом (МЭШ/ЦДЗ):", reply_markup=ReplyKeyboardRemove())
+        return WAITING_URL
+    elif text == "⚙️ Настройки":
+        await update.message.reply_text("Здесь вы можете настроить авторизацию.\nОтправьте ваш токен доступа:", reply_markup=ReplyKeyboardRemove())
+        return WAITING_TOKEN
+    elif text == "💻 Мои ЦДЗ тесты":
+        await update.message.reply_text("Список ваших тестов пока пуст.")
+        return WAITING_ACTION
+    elif text == "🆘 Помощь":
+        await update.message.reply_text("Этот бот помогает решать тесты ЦДЗ. Для начала нажмите 'Авторешение'.")
+        return WAITING_ACTION
+    elif text == "❌ Отмена":
+        return await cancel(update, context)
+    else:
+        await update.message.reply_text("Пожалуйста, используйте кнопки меню.")
+        return WAITING_ACTION
+
+async def receive_token(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    token = update.message.text.strip()
+    context.user_data["auth_token"] = token
+    await update.message.reply_text("✅ Токен сохранен! Теперь введите URL теста:")
     return WAITING_URL
 
 
@@ -86,6 +122,15 @@ async def receive_class(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
         context.user_data["page"] = page
 
         await page.goto(url, timeout=45_000, wait_until="domcontentloaded")
+        
+        # Если есть сохраненный токен, пробуем его применить (упрощенная логика)
+        auth_token = context.user_data.get("auth_token")
+        if auth_token:
+            # Пытаемся добавить токен в localStorage или cookies в зависимости от платформы
+            await page.evaluate(f"localStorage.setItem('auth_token', '{auth_token}')")
+            # Для МЭШ часто используется кука CMS-SESSION
+            await ctx.add_cookies([{"name": "CMS-SESSION", "value": auth_token, "url": url}])
+            await page.reload(wait_until="domcontentloaded")
         
         if "videouroki.net/tests/" in url:
             # Заполняем форму
@@ -259,8 +304,14 @@ def main():
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler("start", start)],
         states={
+            WAITING_ACTION: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_menu_click)
+            ],
             WAITING_URL: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, receive_url)
+            ],
+            WAITING_TOKEN: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, receive_token)
             ],
             WAITING_LASTNAME: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, receive_lastname)
