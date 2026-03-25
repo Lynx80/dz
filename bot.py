@@ -111,6 +111,28 @@ def get_settings_kb():
     builder.adjust(1)
     return builder.as_markup()
 
+# ─── ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ───
+
+async def check_token(message: types.Message, user):
+    if not user or not user.get('token_mos'):
+        help_text = (
+            "⚠️ **Токен не найден!**\n\n"
+            "Чтобы пользоваться ботом, нужно привязать ваш аккаунт Школьного Портала.\n\n"
+            "**Как получить токен:**\n"
+            "1️⃣ Зайдите в [Школьный Портал](https://myschool.mosreg.ru) с компьютера.\n"
+            "2️⃣ Нажмите **F12** (Инструменты разработчика) -> вкладка **Network** (Сеть).\n"
+            "3️⃣ Обновите страницу и найдите любой запрос (например, `profile_info`).\n"
+            "4️⃣ В заголовках (Headers) найдите `auth-token` или `Authorization`.\n"
+            "5️⃣ Скопируйте длинный код (начинается на `eyJ...`) и **пришлите его сюда**.\n\n"
+            "👉 Или просто нажмите на кнопку «⚡ Авто решение», чтобы я помог вам."
+        )
+        if isinstance(message, types.CallbackQuery):
+            await message.message.answer(help_text, parse_mode="Markdown", disable_web_page_preview=True)
+        else:
+            await message.answer(help_text, parse_mode="Markdown", disable_web_page_preview=True)
+        return False
+    return True
+
 # ─── ОБРАБОТЧИКИ КОМАНД ───
 
 @dp.message(Command("start"))
@@ -138,11 +160,17 @@ async def cmd_restart(message: types.Message, state: FSMContext):
 
 @dp.message(F.text == "📚 Моё ДЗ")
 async def my_hw_start(message: types.Message, state: FSMContext):
+    user = db.get_user(message.from_user.id)
+    if not await check_token(message, user): return
+    
     await message.answer("📅 **Выберите неделю:**", reply_markup=get_week_kb(prefix="manual"))
     await state.set_state(BotStates.WEEK_SELECTION)
 
 @dp.message(F.text == "⚡ Авто решение")
 async def auto_solve_start(message: types.Message, state: FSMContext):
+    user = db.get_user(message.from_user.id)
+    if not await check_token(message, user): return
+    
     await message.answer("🚀 **Авто-режим: Выберите неделю:**", reply_markup=get_week_kb(prefix="auto"))
     await state.set_state(BotStates.AUTO_SOLVE_WEEK)
 
@@ -159,6 +187,9 @@ async def profile_main(message: types.Message, state: FSMContext):
 
 @dp.message(F.text == "📊 Статистика")
 async def stats_main(message: types.Message, state: FSMContext):
+    user = db.get_user(message.from_user.id)
+    if not await check_token(message, user): return
+    
     stats = db.get_stats(message.from_user.id)
     stats_text = (
         f"📊 **Ваша статистика**\n\n"
