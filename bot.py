@@ -5,12 +5,13 @@ from io import BytesIO
 
 from dotenv import load_dotenv
 from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeout
-from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove
+from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application,
     CommandHandler,
     MessageHandler,
     ConversationHandler,
+    CallbackQueryHandler,
     ContextTypes,
     filters,
 )
@@ -51,21 +52,32 @@ async def handle_menu_click(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             "⚠️ **Мяу-мяу! Токен не загружен!** 😿\n\n"
             "🐱 Токен — это твой цифровой ключ! Он дает робокоту доступ к тестам! 🔑\n\n"
             "🔑 **Как получить токен:**\n\n"
-            "1️⃣ **Перейди по ссылке:**\n"
-            "   - [Москва (МЭШ)](https://school.mos.ru/)\n"
-            "   - **Для Московской области:**\n"
-            "     • [Войти в аккаунт](https://myschool.mosreg.ru/)\n"
-            "     • [Получить токен](https://myschool.mosreg.ru/)\n\n"
-            "2️⃣ **Введи логин и пароль** от своего аккаунта.\n"
-            "   (Не волнуйся, мы их не видим — это только для системы! 🔒)\n\n"
-            "3️⃣ **Скопируй токен** с открывшейся страницы.\n"
-            "   (Он начинается с `eyJhb...` — как секретный код! 🕵️‍♂️)\n\n"
-            "4️⃣ **Отправь токен сюда**, и наш бот сразу приступит к работе! 🚀\n\n"
-            "P.S. Без токена — никаких тестов. Так что действуй! 🔥\n"
-            "Для МО обязательно сначала войти в аккаунт, а потом получить токен! мяу!"
+            "1️⃣ Перейди по ссылке ниже.\n"
+            "2️⃣ Введи логин и пароль от своего аккаунта.\n"
+            "3️⃣ Скопируй токен со страницы (начинается с `eyJhb...`).\n"
+            "4️⃣ Отправь его мне ответным сообщением! 🚀"
         )
-        await update.message.reply_text(instruction, parse_mode="Markdown", reply_markup=ReplyKeyboardRemove())
+        
+        keyboard = [
+            [InlineKeyboardButton("🏙 Москва (МЭШ)", url="https://school.mos.ru/api/family/web/v1/auth/token")],
+            [InlineKeyboardButton("🌍 МО: Войти", url="https://myschool.mosreg.ru/")],
+            [InlineKeyboardButton("🔑 МО: Получить токен", url="https://myschool.mosreg.ru/api/v1/auth/token")],
+            [InlineKeyboardButton("◀️ Вернуться в меню", callback_data="main_menu")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await update.message.reply_text(instruction, parse_mode="Markdown", reply_markup=reply_markup)
         return WAITING_TOKEN
+
+async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    query = update.callback_query
+    await query.answer()
+    if query.data == "main_menu":
+        await _cleanup_browser(context)
+        reply_markup = ReplyKeyboardMarkup(MAIN_MENU_KBD, resize_keyboard=True)
+        await query.message.reply_text("Вы вернулись в главное меню:", reply_markup=reply_markup)
+        return WAITING_ACTION
+    return WAITING_TOKEN
     elif text == "💻 Мои ЦДЗ тесты":
         await update.message.reply_text("Список ваших тестов пока пуст.")
         return WAITING_ACTION
@@ -328,7 +340,8 @@ def main():
                 MessageHandler(filters.TEXT & ~filters.COMMAND, receive_url)
             ],
             WAITING_TOKEN: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, receive_token)
+                MessageHandler(filters.TEXT & ~filters.COMMAND, receive_token),
+                CallbackQueryHandler(handle_callback)
             ],
             WAITING_LASTNAME: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, receive_lastname)
