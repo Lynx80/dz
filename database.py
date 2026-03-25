@@ -30,7 +30,9 @@ class Database:
                     auto_solve INTEGER DEFAULT 0,
                     cache_enabled INTEGER DEFAULT 1,
                     logs_enabled INTEGER DEFAULT 1,
-                    language TEXT DEFAULT 'ru'
+                    language TEXT DEFAULT 'ru',
+                    solve_delay INTEGER DEFAULT 15,
+                    accuracy_mode TEXT DEFAULT 'excellent'
                 )
             """)
             # Таблица кеша ответов ИИ (для экономии токенов)
@@ -72,9 +74,9 @@ class Database:
         with self._get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("""
-                INSERT OR IGNORE INTO users (user_id, first_name, last_name, grade, student_id)
-                VALUES (?, ?, ?, ?, ?)
-            """, (user_id, first_name, last_name, grade, student_id))
+                INSERT OR IGNORE INTO users (user_id, first_name, last_name, grade, student_id, solve_delay, accuracy_mode)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            """, (user_id, first_name, last_name, grade, student_id, 15, 'excellent'))
             conn.commit()
 
     def update_user(self, user_id, **kwargs):
