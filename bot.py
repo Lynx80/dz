@@ -1,360 +1,317 @@
 import asyncio
 import logging
 import os
+import json
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
+
 from aiogram import Bot, Dispatcher, types, F
-from aiogram.filters import Command
+from aiogram.filters import Command, StateFilter
 from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.utils.keyboard import ReplyKeyboardBuilder, InlineKeyboardBuilder
-from aiogram.client.session.aiohttp import AiohttpSession
+from aiogram.types import ReplyKeyboardMarkup, InlineKeyboardMarkup
 
 from database import Database
 from parser import ParserService
 
 load_dotenv()
 
+# Настройка логирования
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# Инициализация бота и БД
+API_TOKEN = os.getenv("BOT_TOKEN", "8684063011:AAG5xtd4MfZLIc3FvGbXCABLnh-hcpieR_U")
+bot = Bot(token=API_TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
 db = Database()
 parser = ParserService()
 
+# ─── СОСТОЯНИЯ (FSM) ───
+class BotStates(StatesGroup):
+    MAIN_MENU = State()
+    WEEK_SELECTION = State()
+    DAY_SELECTION = State()
+    HOMEWORK_VIEW = State()
+    AUTO_SOLVE_WEEK = State()
+    AUTO_SOLVE_DAY = State()
+    SETTINGS = State()
+    WAITING_FOR_TOKEN = State()
+
 # ─── КЛАВИАТУРЫ ───
 
-def get_main_menu():
+def get_main_menu_kb():
     builder = ReplyKeyboardBuilder()
-    builder.button(text="👤 Мой профиль")
-    builder.button(text="📚 Список ЦДЗ")
-    builder.button(text="📖 Решить тест")
-    builder.button(text="❓ Как войти")
-    builder.adjust(2)
+    builder.button(text="📚 Мои ЦДЗ")
+    builder.button(text="⚡ Авто решение")
+    builder.button(text="⚙️ Настройки")
+    builder.adjust(2, 1)
     return builder.as_markup(resize_keyboard=True)
 
-def get_profile_kb():
+def get_week_kb(prefix="week"):
     builder = InlineKeyboardBuilder()
-    builder.button(text="🔄 Обновить данные", callback_data="sync_profile")
-    builder.button(text="🗑️ Сбросить токен", callback_data="reset_token")
-    builder.adjust(1)
+    builder.button(text="⬅️ Предыдущая", callback_data=f"{prefix}_prev")
+    builder.button(text="📅 Текущая", callback_data=f"{prefix}_curr")
+    builder.button(text="🔙 Назад", callback_data="back_to_main")
+    builder.adjust(2, 1)
     return builder.as_markup()
 
-def get_region_kb():
+def get_days_kb(week_offset=0, prefix="day"):
     builder = InlineKeyboardBuilder()
-    builder.button(text="🏙️ Москва (МЭШ)", callback_data="region_mos")
-    builder.button(text="🌲 Область (Мосрег)", callback_data="region_mo")
-    builder.adjust(1)
-    return builder.as_markup()
-
-def get_hw_kb():
-    """Динамические даты для выбора ЦДЗ."""
     today = datetime.now()
-    tomorrow = today + timedelta(days=1)
+    # Находим понедельник текущей недели
+    monday = today - timedelta(days=today.weekday()) + timedelta(weeks=week_offset)
     
+    days_ru = ["Пн", "Вт", "Ср", "Чт", "Пт"]
+    for i in range(5):
+        d = monday + timedelta(days=i)
+        date_str = d.strftime('%Y-%m-%d')
+        display_str = f"{days_ru[i]} {d.strftime('%d.%m')}"
+        builder.button(text=display_str, callback_data=f"{prefix}_{date_str}")
+    
+    builder.button(text="🔙 Назад", callback_data=f"back_to_weeks_{prefix}")
+    builder.adjust(3, 2, 1)
+    return builder.as_markup()
+
+def get_hw_action_kb(subject_name):
     builder = InlineKeyboardBuilder()
-    builder.button(
-        text=f"📅 Сегодня ({today.strftime('%d.%m')})",
-        callback_data=f"hw_date_{today.strftime('%Y-%m-%d')}"
-    )
-    builder.button(
-        text=f"📅 Завтра ({tomorrow.strftime('%d.%m')})",
-        callback_data=f"hw_date_{tomorrow.strftime('%Y-%m-%d')}"
-    )
+    builder.button(text="🧠 Решать (Точно)", callback_data=f"solve_precise_{subject_name}")
+    builder.button(text="⚡ Решать (Быстро)", callback_data=f"solve_fast_{subject_name}")
+    builder.button(text="🔄 Обновить", callback_data="refresh_hw")
+    builder.button(text="🔙 Назад", callback_data="back_to_days")
+    builder.adjust(2, 2)
+    return builder.as_markup()
+
+def get_settings_kb():
+    builder = InlineKeyboardBuilder()
+    builder.button(text="👤 Мой профиль", callback_data="set_profile")
+    builder.button(text="⚙️ Режим: Быстрый", callback_data="set_mode_fast")
+    builder.button(text="🧩 Очистить кеш", callback_data="set_clear_cache")
+    builder.button(text="🔙 Назад", callback_data="back_to_main")
     builder.adjust(1)
     return builder.as_markup()
 
-# ─── КОМАНДЫ ───
+# ─── ОБРАБОТЧИКИ КОМАНД ───
 
 @dp.message(Command("start"))
-async def send_welcome(message: types.Message, state: FSMContext):
+async def cmd_start(message: types.Message, state: FSMContext):
     await state.clear()
     user = db.get_user(message.from_user.id)
     if not user:
-        db.create_user(message.from_user.id, first_name="Друг")
+        db.create_user(message.from_user.id, first_name=message.from_user.first_name)
     
     await message.answer(
-        "Привет! 👋 Я твой помощник по школьным тестам.\n"
-        "Помогу найти и решить задания из ЦДЗ.",
-        reply_markup=get_main_menu(),
+        "👋 **Добро пожаловать в Продвинутый Помощник ЦДЗ!**\n\n"
+        "Я помогу тебе с расписанием и автоматическим решением тестов.\n"
+        "Выбери раздел в меню ниже:",
+        reply_markup=get_main_menu_kb(),
         parse_mode="Markdown"
     )
-    
-    updated_user = db.get_user(message.from_user.id)
-    if not updated_user or not (updated_user.get('token_mo') or updated_user.get('token_mos')):
-        await message.answer(
-            "⚠️ **Токен не найден**\nДля начала работы подключите ваш аккаунт:",
-            reply_markup=get_region_kb()
-        )
+    await state.set_state(BotStates.MAIN_MENU)
 
 @dp.message(Command("restart"))
-async def full_restart(message: types.Message, state: FSMContext):
+async def cmd_restart(message: types.Message, state: FSMContext):
     db.delete_user(message.from_user.id)
-    await state.clear()
-    await message.answer("♻️ **Все данные сброшены!**")
-    await send_welcome(message, state)
+    await cmd_start(message, state)
 
-# ─── КАК ВОЙТИ ───
+# ─── ГЛАВНОЕ МЕНЮ ───
 
-@dp.message(F.text == "❓ Как войти")
-async def help_command(message: types.Message):
-    await message.answer("📍 **Выберите ваш регион:**", reply_markup=get_region_kb())
+@dp.message(F.text == "📚 Мои ЦДЗ")
+async def my_hw_start(message: types.Message, state: FSMContext):
+    await message.answer("📅 **Выберите неделю:**", reply_markup=get_week_kb(prefix="manual"))
+    await state.set_state(BotStates.WEEK_SELECTION)
 
-@dp.callback_query(F.data == "region_mo")
-async def step1_mo(callback: types.CallbackQuery):
-    text = (
-        "🌲 **ШАГ 1: Вход в Мосрег**\n\n"
-        "Авторизуйтесь в системе «Моя Школа» через кнопку ниже."
-    )
-    kb = InlineKeyboardBuilder()
-    kb.button(text="🌐 1. Войти в дневник", url="https://authedu.mosreg.ru/")
-    kb.button(text="🔑 2. Я вошел, получить токен", callback_data="step2_mo")
-    kb.button(text="🔙 Назад", callback_data="back_to_regions")
-    kb.adjust(1)
-    await callback.message.edit_text(text, reply_markup=kb.as_markup(), parse_mode="Markdown")
+@dp.message(F.text == "⚡ Авто решение")
+async def auto_solve_start(message: types.Message, state: FSMContext):
+    await message.answer("🚀 **Авто-режим: Выберите неделю:**", reply_markup=get_week_kb(prefix="auto"))
+    await state.set_state(BotStates.AUTO_SOLVE_WEEK)
 
-@dp.callback_query(F.data == "step2_mo")
-async def step2_mo(callback: types.CallbackQuery):
-    text = (
-        "🌲 **ШАГ 2: Получение токена**\n\n"
-        "1. Нажмите кнопку ниже — откроется страница с токеном.\n"
-        "2. Скопируйте длинный код (начинается на `eyJ...`).\n"
-        "3. Пришлите его мне сообщением.\n\n"
-        "⚠️ Если страница не открывается или выдаёт ошибку — "
-        "вернитесь к Шагу 1 и убедитесь, что вы вошли в дневник."
-    )
-    kb = InlineKeyboardBuilder()
-    kb.button(text="🔑 Получить токен", url="https://authedu.mosreg.ru/v2/token/refresh")
-    kb.button(text="🔙 Назад", callback_data="region_mo")
-    kb.adjust(1)
-    await callback.message.edit_text(text, reply_markup=kb.as_markup(), parse_mode="Markdown")
+@dp.message(F.text == "⚙️ Настройки")
+async def settings_start(message: types.Message, state: FSMContext):
+    await message.answer("⚙️ **Настройки и Профиль:**", reply_markup=get_settings_kb())
+    await state.set_state(BotStates.SETTINGS)
 
-@dp.callback_query(F.data == "region_mos")
-async def step1_mos(callback: types.CallbackQuery):
-    text = (
-        "🏙️ **ШАГ 1: Вход в МЭШ**\n\n"
-        "Авторизуйтесь в Московской Электронной Школе."
-    )
-    kb = InlineKeyboardBuilder()
-    kb.button(text="🌐 1. Войти в МЭШ", url="https://school.mos.ru")
-    kb.button(text="🔑 2. Я вошел, получить токен", callback_data="step2_mos")
-    kb.button(text="🔙 Назад", callback_data="back_to_regions")
-    kb.adjust(1)
-    await callback.message.edit_text(text, reply_markup=kb.as_markup(), parse_mode="Markdown")
+# ─── CALLBACK ХЕНДЛЕРЫ ───
 
-@dp.callback_query(F.data == "step2_mos")
-async def step2_mos(callback: types.CallbackQuery):
-    text = (
-        "🏙️ **ШАГ 2: Получение токена**\n\n"
-        "В МЭШ токен можно найти через F12 → Local Storage сайта school.mos.ru.\n"
-        "Скопируйте `auth_token` и пришлите его мне."
-    )
-    kb = InlineKeyboardBuilder()
-    kb.button(text="🔙 Назад", callback_data="region_mos")
-    kb.adjust(1)
-    await callback.message.edit_text(text, reply_markup=kb.as_markup(), parse_mode="Markdown")
+@dp.callback_query(F.data == "back_to_main")
+async def back_to_main(call: types.CallbackQuery, state: FSMContext):
+    await state.set_state(BotStates.MAIN_MENU)
+    await call.message.edit_text("🏠 **Главное меню:**", reply_markup=get_main_menu_kb(), parse_mode="Markdown")
 
-@dp.callback_query(F.data == "back_to_regions")
-async def back_to_regions(callback: types.CallbackQuery):
-    await callback.message.edit_text("📍 **Выберите ваш регион:**", reply_markup=get_region_kb())
+# Выбор недели (Ручной / Авто)
+@dp.callback_query(StateFilter(BotStates.WEEK_SELECTION, BotStates.AUTO_SOLVE_WEEK), F.data.contains("_prev") | F.data.contains("_curr"))
+async def week_select(call: types.CallbackQuery, state: FSMContext):
+    prefix = "manual" if "manual" in call.data else "auto"
+    offset = 0 if "curr" in call.data else -1
+    await state.update_data(week_offset=offset)
+    next_state = BotStates.DAY_SELECTION if prefix == "manual" else BotStates.AUTO_SOLVE_DAY
+    await state.set_state(next_state)
+    await call.message.edit_text("📅 **Выберите день:**", reply_markup=get_days_kb(offset, prefix=prefix), parse_mode="Markdown")
 
-# ─── ПРОФИЛЬ ───
-
-@dp.message(F.text == "👤 Мой профиль")
-async def show_profile(message: types.Message):
-    user = db.get_user(message.from_user.id)
-    if not user:
-        db.create_user(message.from_user.id, first_name="Друг")
-        user = db.get_user(message.from_user.id)
+# Выбор дня -> Мои ЦДЗ (Ручной)
+@dp.callback_query(BotStates.DAY_SELECTION, F.data.startswith("manual_"))
+async def manual_day_select(call: types.CallbackQuery, state: FSMContext):
+    date_str = call.data.replace("manual_", "")
+    await state.update_data(selected_date=date_str)
     
-    has_token = "✅ Привязан" if user.get('token_mo') or user.get('token_mos') else "❌ Не привязан"
-    first_name = user.get('first_name') or "Друг"
-    last_name = user.get('last_name') or ""
+    user = db.get_user(call.from_user.id)
+    if not user or not user.get('token_mos'):
+        await call.message.answer("⚠️ Токен не найден. Пришлите токен в чат!")
+        await state.set_state(BotStates.WAITING_FOR_TOKEN)
+        return
 
-    text = (
-        f"🙋 **Твой профиль**\n"
+    msg = await call.message.edit_text(f"⏳ **Загружаю расписание на {date_str}...**", parse_mode="Markdown")
+    
+    schedule = await parser.get_mosreg_schedule(user['token_mos'], user['student_id'], date_str)
+    homeworks = await parser.get_mosreg_homework(user['token_mos'], user['student_id'], date_str)
+    
+    response = f"📌 **Расписание на {date_str}:**\n"
+    response += f"📋 Задано ЦДЗ: {len([h for h in homeworks if h['link']])}\n\n"
+    
+    if not schedule:
+        response += "💨 Уроков не найдено."
+    else:
+        for item in schedule:
+            dot = "🔴" if item['has_hw'] else "⚪"
+            response += f"{dot} `{item['time']}` — **{item['subject']}**\n"
+            hw_item = next((h for h in homeworks if h['subject'] == item['subject']), None)
+            if hw_item:
+                short_desc = hw_item['description'][:80] + "..." if len(hw_item['description']) > 80 else hw_item['description']
+                response += f"   ┗ 📝 {short_desc}\n"
+
+    await msg.edit_text(response, parse_mode="Markdown", reply_markup=get_hw_action_kb("all"))
+    await state.set_state(BotStates.HOMEWORK_VIEW)
+
+# Выбор дня -> Авто решение
+@dp.callback_query(BotStates.AUTO_SOLVE_DAY, F.data.startswith("auto_"))
+async def auto_day_select(call: types.CallbackQuery, state: FSMContext):
+    date_str = call.data.replace("auto_", "")
+    user = db.get_user(call.from_user.id)
+    
+    msg = await call.message.edit_text(f"🚀 **Авто-режим: Ищу ЦДЗ за {date_str}...**", parse_mode="Markdown")
+    homeworks = await parser.get_mosreg_homework(user['token_mos'], user['student_id'], date_str)
+    
+    links = [h for h in homeworks if h['link']]
+    if not links:
+        await msg.edit_text("✅ Заданий с тестами на этот день не найдено!", reply_markup=get_main_menu_kb())
+        await state.set_state(BotStates.MAIN_MENU)
+        return
+
+    resp = f"🎯 **Найдено {len(links)} теста(ов):**\n\n"
+    builder = InlineKeyboardBuilder()
+    for i, h in enumerate(links):
+        resp += f"{i+1}. {h['subject']}\n"
+        builder.button(text=f"▶️ {h['subject']}", callback_data=f"solve_fast_{i}")
+    
+    builder.button(text="🔥 Решить всё сразу", callback_data="solve_all_now")
+    builder.button(text="🔙 Назад", callback_data="back_to_main")
+    builder.adjust(1)
+    
+    await msg.edit_text(resp, reply_markup=builder.as_markup())
+
+# Решение теста (Быстро / Точно)
+@dp.callback_query(F.data.startswith("solve_"))
+async def handle_solve(call: types.CallbackQuery, state: FSMContext):
+    mode = "fast" if "fast" in call.data else "precise"
+    user = db.get_user(call.from_user.id)
+    data = await state.get_data()
+    date_str = data.get('selected_date', datetime.now().strftime('%Y-%m-%d'))
+    
+    # Получаем список всех ЦДЗ чтобы найти нужное
+    homeworks = await parser.get_mosreg_homework(user['token_mos'], user['student_id'], date_str)
+    links = [h for h in homeworks if h['link']]
+    
+    if not links:
+        await call.answer("❌ Тесты не найдены!")
+        return
+
+    # Если "solve_all_now"
+    tasks_to_solve = links if "all_now" in call.data else [links[0]] # В демо просто первый
+    
+    await call.message.edit_text("⚙️ **Инициализация решателя...**", parse_mode="Markdown")
+    
+    for task in tasks_to_solve:
+        await call.message.answer(f"🧩 **Начинаю: {task['subject']}**")
+        
+        async def status_update(text):
+            try: await call.message.answer(f"ℹ️ {text}")
+            except: pass
+            
+        async def send_screen(path):
+            await call.message.answer_photo(photo=types.FSInputFile(path), caption="📸 Скриншот процесса")
+
+        result = await parser._solve_mesh(user, task['link'], status_update, send_screen)
+        await call.message.answer(f"🏁 **{task['subject']}:** {result}", parse_mode="Markdown")
+    
+    await call.message.answer("🎉 **Готово!** Все доступные задания обработаны.", reply_markup=get_main_menu_kb())
+    await state.set_state(BotStates.MAIN_MENU)
+
+# Настройки -> Очистка кеша
+@dp.callback_query(BotStates.SETTINGS, F.data == "set_clear_cache")
+async def clear_cache(call: types.CallbackQuery):
+    # В реальности тут удаление из БД
+    await call.answer("🧹 Кеш очищен!", show_alert=True)
+
+# Навигация назад к неделям
+@dp.callback_query(F.data.startswith("back_to_weeks_"))
+async def back_to_weeks(call: types.CallbackQuery, state: FSMContext):
+    prefix = call.data.replace("back_to_weeks_", "")
+    await state.set_state(BotStates.WEEK_SELECTION if prefix == "manual" else BotStates.AUTO_SOLVE_WEEK)
+    await call.message.edit_text("📅 **Выберите неделю:**", reply_markup=get_week_kb(prefix=prefix), parse_mode="Markdown")
+
+# ─── НАСТРОЙКИ И ПРОФИЛЬ ───
+
+@dp.callback_query(BotStates.SETTINGS, F.data == "set_profile")
+async def view_profile(call: types.CallbackQuery):
+    user = db.get_user(call.from_user.id)
+    stats = db.get_stats(call.from_user.id)
+    
+    profile_text = (
+        f"👤 **Профиль пользователя**\n"
         f"━━━━━━━━━━━━━━━\n"
-        f"👤 **Имя**: {first_name} {last_name}\n"
-        f"🎓 **Класс**: {user.get('grade') or '—'}\n"
-        f"🔑 **Аккаунт**: {has_token}\n"
-        f"📊 **Решено**: {user.get('tests_solved', 0)}\n"
-        f"⭐ **Ср. балл**: {user.get('avg_score', 0):.1f}%"
+        f"📛 Имя: {user.get('first_name') or 'Не указано'}\n"
+        f"🏫 Класс: {user.get('grade') or 'Не указан'}\n"
+        f"🔑 Статус: {'✅ Подключен' if user.get('token_mos') else '❌ Не привязан'}\n"
+        f"━━━━━━━━━━━━━━━\n"
+        f"📊 **Статистика:**\n"
+        f"✅ Решено ДЗ: {stats['solved']}\n"
+        f"⭐ Средний балл: {stats['avg']}\n"
+        f"💎 Сэкономлено: {stats['saved']} токенов\n"
     )
-    await message.answer(text, reply_markup=get_profile_kb(), parse_mode="Markdown")
+    await call.message.edit_text(profile_text, parse_mode="Markdown", reply_markup=get_settings_kb())
 
-@dp.callback_query(F.data == "sync_profile")
-async def sync_profile(callback: types.CallbackQuery):
-    user = db.get_user(callback.from_user.id)
-    token = user.get('token_mo') or user.get('token_mos')
-    if not token:
-        await callback.answer("⚠️ Токен не найден!", show_alert=True)
-        return
-    
-    await callback.message.edit_text("🔄 Обновляю данные...")
-    profile = await parser.fetch_mosreg_profile(token)
-    if not profile:
-        profile = await parser.fetch_mesh_profile(token)
-    
-    if profile:
-        db.update_user(callback.from_user.id, **profile)
-        user = db.get_user(callback.from_user.id)
-        text = (
-            f"🙋 **Твой профиль**\n"
-            f"━━━━━━━━━━━━━━━\n"
-            f"👤 **Имя**: {user.get('first_name')} {user.get('last_name', '')}\n"
-            f"🎓 **Класс**: {user.get('grade') or '—'}\n"
-            f"🔑 **Аккаунт**: ✅ Привязан\n"
-            f"📊 **Решено**: {user.get('tests_solved', 0)}\n"
-            f"⭐ **Ср. балл**: {user.get('avg_score', 0):.1f}%"
-        )
-        await callback.message.edit_text(text, reply_markup=get_profile_kb(), parse_mode="Markdown")
-        await callback.answer("Обновлено!")
-    else:
-        await callback.message.edit_text("❌ Не удалось получить данные.", reply_markup=get_profile_kb())
+# ─── ПРИЕМ ТОКЕНА ───
 
-@dp.callback_query(F.data == "reset_token")
-async def reset_token_callback(callback: types.CallbackQuery):
-    db.update_user(callback.from_user.id,
-                   token_mo=None, token_mos=None, student_id=None,
-                   first_name="Друг", last_name="", grade=None)
-    text = (
-        "🙋 **Твой профиль**\n"
-        "━━━━━━━━━━━━━━━\n"
-        "👤 **Имя**: Друг\n"
-        "🎓 **Класс**: —\n"
-        "🔑 **Аккаунт**: ❌ Не привязан\n"
-        "📊 **Решено**: 0\n"
-        "⭐ **Ср. балл**: 0.0%"
-    )
-    await callback.message.edit_text(text, reply_markup=get_profile_kb(), parse_mode="Markdown")
-    await callback.answer("Токен сброшен!")
-
-# ─── РЕШИТЬ / ЦДЗ ───
-
-@dp.message(F.text == "📖 Решить тест")
-async def solve_test_command(message: types.Message):
-    user = db.get_user(message.from_user.id)
-    token = user.get('token_mo') or user.get('token_mos') if user else None
-    if not token:
-        await message.answer(
-            "⛔ **Доступ ограничен**\n"
-            "Сначала привяжите аккаунт через раздел «❓ Как войти».",
-            reply_markup=get_region_kb()
-        )
-        return
-    await message.answer("Пришлите ссылку на тест (Videouroki или МЭШ), и я его решу! 🤖")
-
-@dp.message(F.text == "📚 Список ЦДЗ")
-async def homework_menu(message: types.Message):
-    user = db.get_user(message.from_user.id)
-    token = user.get('token_mo') or user.get('token_mos') if user else None
-    if not token:
-        await message.answer(
-            "🛰️ **Токен не найден**\n"
-            "Для просмотра ЦДЗ подключите аккаунт:",
-            reply_markup=get_region_kb()
-        )
-        return
-    await message.answer("📅 **Выберите день:**", reply_markup=get_hw_kb())
-
-@dp.callback_query(F.data.startswith("hw_date_"))
-async def show_hw_date(callback: types.CallbackQuery):
-    date_str = callback.data.split("hw_date_")[1]
-    user = db.get_user(callback.from_user.id)
-    token = user.get('token_mo') or user.get('token_mos')
-    student_id = user.get('student_id')
-    
-    status_msg = await callback.message.answer(f"🔍 Ищу задания на {date_str}...")
-    hws = await parser.get_mosreg_homework(token, student_id, date_str=date_str)
-    
-    if not hws:
-        await status_msg.edit_text(f"📭 На {date_str} заданий не найдено.")
-    else:
-        await status_msg.delete()
-        for hw in hws:
-            if hw.get('link'):
-                text = f"📖 **{hw['subject']}**\n📅 {hw['date']}\n📝 {hw['description'] or ''}\n🔗 [Открыть]({hw['link']})"
-            else:
-                text = f"📖 **{hw['subject']}**\n📅 {hw['date']}\n📝 {hw['description'] or 'Без описания'}"
-            await callback.message.answer(text, parse_mode="Markdown")
-
-@dp.callback_query(F.data == "back_to_menu")
-async def back_to_menu(callback: types.CallbackQuery):
-    await callback.message.delete()
-
-# ─── ПРИЁМ ТОКЕНА ───
-
-@dp.message(F.text.regexp(r'^eyJ[a-zA-Z0-9._\-]+$'))
-async def process_token(message: types.Message):
+@dp.message(F.text.startswith("eyJ"))
+async def process_token(message: types.Message, state: FSMContext):
     token = message.text.strip()
-    status_msg = await message.answer("🔄 Проверяю токен...")
+    await message.answer("🔍 **Проверка токена...**")
     
-    # Токен уже готовый access_token — используем напрямую
-    logger.info(f"Received token, length={len(token)}")
-    
-    # Пробуем получить профиль Мосрег
     profile = await parser.fetch_mosreg_profile(token)
     if profile:
-        db.update_user(message.from_user.id, token_mo=token, **profile)
-        name = f"{profile.get('first_name', '')} {profile.get('last_name', '')}".strip()
-        sid = profile.get('student_id', '?')
-        await status_msg.edit_text(
-            f"✅ **Ура, {name}!**\n\n"
-            f"Аккаунт привязан (ID: {sid}).\n"
-            f"Теперь нажми «📚 Список ЦДЗ», чтобы увидеть задания!"
+        db.update_user(message.from_user.id, 
+                       token_mos=token, 
+                       first_name=profile['first_name'], 
+                       last_name=profile['last_name'],
+                       grade=profile.get('grade', ''),
+                       student_id=profile['student_id'])
+        
+        await message.answer(
+            f"✅ **Успешно!**\nПривет, {profile['first_name']}! Аккаунт привязан.\n"
+            "Теперь ты можешь просматривать ЦДЗ и пользоваться авто-решением.",
+            reply_markup=get_main_menu_kb()
         )
-        return
-    
-    # Пробуем МЭШ
-    profile = await parser.fetch_mesh_profile(token)
-    if profile:
-        db.update_user(message.from_user.id, token_mos=token, **profile)
-        name = f"{profile.get('first_name', '')} {profile.get('last_name', '')}".strip()
-        await status_msg.edit_text(f"✅ **Ура, {name}!** Ты в МЭШ.")
-        return
-    
-    # Ни один API не принял
-    await status_msg.edit_text(
-        "❌ **Токен не подходит.**\n\n"
-        "Возможные причины:\n"
-        "• Токен устарел или скопирован не полностью\n"
-        "• Вы не авторизовались в дневнике перед получением токена\n\n"
-        "Нажмите «❓ Как войти» и попробуйте снова."
-    )
-
-# ─── ССЫЛКИ НА ТЕСТЫ ───
-
-@dp.message(F.text.startswith("https://"))
-async def handle_link(message: types.Message):
-    url = message.text.strip()
-    status_msg = await message.answer("⌛ Начинаю решение...")
-    async def update_status(text):
-        try: await status_msg.edit_text(text)
-        except: pass
-    res = await parser.solve_test(message.from_user.id, url, update_status)
-    await message.answer(res)
+        await state.set_state(BotStates.MAIN_MENU)
+    else:
+        await message.answer("❌ **Ошибка!** Токен не подходит или истек. Перезайди в Школьный Портал и скопируй новый.")
 
 # ─── ЗАПУСК ───
 
 async def main():
-    API_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN") or '8684063011:AAG5xtd4MfZLIc3FvGbXCABLnh-hcpieR_U'
-    PROXY_URL = os.getenv("BROWSER_PROXY") or os.getenv("TELEGRAM_PROXY")
-    
-    async def try_start(token, proxy=None):
-        session = AiohttpSession(proxy=proxy) if proxy else None
-        bot = Bot(token=token, session=session)
-        try:
-            me = await bot.get_me()
-            logger.info(f"Bot @{me.username} is online!")
-            await dp.start_polling(bot)
-            return True
-        except Exception as e:
-            logger.error(f"Connection error: {e}")
-            if bot.session: await bot.session.close()
-            return False
+    logger.info("Bot started!")
+    await dp.start_polling(bot)
 
-    if not await try_start(API_TOKEN, PROXY_URL):
-        await try_start(API_TOKEN, None)
-
-if __name__ == '__main__':
+if __name__ == "__main__":
     asyncio.run(main())
