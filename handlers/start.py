@@ -7,11 +7,12 @@ router = Router()
 
 def get_main_menu_kb():
     builder = ReplyKeyboardBuilder()
+    builder.button(text="🤖 Авторешение")
     builder.button(text="👤 Профиль")
     builder.button(text="💻 Мои ЦДЗ тесты")
     builder.button(text="🔄 Обновить данные")
     builder.button(text="⚙️ Настройки")
-    builder.adjust(2)
+    builder.adjust(1, 2, 2)
     return builder.as_markup(resize_keyboard=True)
 
 @router.message(Command("start"))
