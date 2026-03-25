@@ -47,7 +47,24 @@ async def handle_menu_click(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         await update.message.reply_text("Введите URL страницы с тестом (МЭШ/ЦДЗ):", reply_markup=ReplyKeyboardRemove())
         return WAITING_URL
     elif text == "⚙️ Настройки":
-        await update.message.reply_text("Здесь вы можете настроить авторизацию.\nОтправьте ваш токен доступа:", reply_markup=ReplyKeyboardRemove())
+        instruction = (
+            "⚠️ **Мяу-мяу! Токен не загружен!** 😿\n\n"
+            "🐱 Токен — это твой цифровой ключ! Он дает робокоту доступ к тестам! 🔑\n\n"
+            "🔑 **Как получить токен:**\n\n"
+            "1️⃣ **Перейди по ссылке:**\n"
+            "   - [Москва (МЭШ)](https://school.mos.ru/)\n"
+            "   - **Для Московской области:**\n"
+            "     • [Войти в аккаунт](https://myschool.mosreg.ru/)\n"
+            "     • [Получить токен](https://myschool.mosreg.ru/)\n\n"
+            "2️⃣ **Введи логин и пароль** от своего аккаунта.\n"
+            "   (Не волнуйся, мы их не видим — это только для системы! 🔒)\n\n"
+            "3️⃣ **Скопируй токен** с открывшейся страницы.\n"
+            "   (Он начинается с `eyJhb...` — как секретный код! 🕵️‍♂️)\n\n"
+            "4️⃣ **Отправь токен сюда**, и наш бот сразу приступит к работе! 🚀\n\n"
+            "P.S. Без токена — никаких тестов. Так что действуй! 🔥\n"
+            "Для МО обязательно сначала войти в аккаунт, а потом получить токен! мяу!"
+        )
+        await update.message.reply_text(instruction, parse_mode="Markdown", reply_markup=ReplyKeyboardRemove())
         return WAITING_TOKEN
     elif text == "💻 Мои ЦДЗ тесты":
         await update.message.reply_text("Список ваших тестов пока пуст.")
