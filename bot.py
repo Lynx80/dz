@@ -501,6 +501,7 @@ async def refresh_user_data(call: types.CallbackQuery, state: FSMContext):
 
 @dp.callback_query(F.data == "subscription_info")
 async def subscription_info(call: types.CallbackQuery):
+    await call.answer()
     sub_text = (
         "💳 **Информация о подписке**\n\n"
         "Подписка открывает доступ к:\n"
@@ -516,12 +517,19 @@ async def subscription_info(call: types.CallbackQuery):
 
 @dp.callback_query(F.data == "back_to_settings")
 async def back_to_settings(call: types.CallbackQuery, state: FSMContext):
-    await call.message.edit_text("⚙️ **Настройки бота:**", reply_markup=get_settings_kb(), parse_mode="Markdown")
+    await call.answer()
+    user = db.get_user(call.from_user.id)
+    await call.message.edit_text(
+        "⚙️ **Настройки бота:**",
+        reply_markup=get_settings_kb(user.get('solve_delay', 15), user.get('accuracy_mode', 'excellent')),
+        parse_mode="Markdown"
+    )
 
 # ─── НАСТРОЙКИ: СКОРОСТЬ И ТОЧНОСТЬ ───
 
 @dp.callback_query(F.data == "set_speed_menu")
 async def speed_menu(call: types.CallbackQuery):
+    await call.answer()
     await call.message.edit_text(
         "⏱ **Настройка скорости решения**\n\n"
         "Выберите время задержки перед отправкой ответов. "
@@ -545,6 +553,7 @@ async def save_speed(call: types.CallbackQuery):
 
 @dp.callback_query(F.data == "set_accuracy_menu")
 async def accuracy_menu(call: types.CallbackQuery):
+    await call.answer()
     await call.message.edit_text(
         "🎯 **Выбор режима точности**\n\n"
         "Выберите желаемый процент правильных ответов для ваших тестов:",
@@ -564,14 +573,7 @@ async def save_accuracy(call: types.CallbackQuery):
         parse_mode="Markdown"
     )
 
-@dp.callback_query(F.data == "back_to_settings")
-async def back_to_settings(call: types.CallbackQuery, state: FSMContext):
-    user = db.get_user(call.from_user.id)
-    await call.message.edit_text(
-        "⚙️ **Настройки бота:**",
-        reply_markup=get_settings_kb(user.get('solve_delay', 15), user.get('accuracy_mode', 'excellent')),
-        parse_mode="Markdown"
-    )
+# Обработчик завершен (дубликат удален выше)
 
 # ─── ЗАПУСК ───
 
