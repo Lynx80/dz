@@ -101,11 +101,34 @@ def get_hw_action_kb(subject_name):
     builder.adjust(2, 2)
     return builder.as_markup()
 
-def get_settings_kb():
+def get_settings_kb(solve_delay=15, accuracy_mode="excellent"):
+    accuracy_map = {"modest": "Обычный (80%)", "advanced": "Перспективный (90%)", "excellent": "Отличник (100%)"}
+    acc_text = accuracy_map.get(accuracy_mode, "Отличник (100%)")
+    
     builder = InlineKeyboardBuilder()
+    builder.button(text=f"⏱ Скорость: {solve_delay} мин", callback_data="set_speed_menu")
+    builder.button(text=f"🎯 Точность: {acc_text}", callback_data="set_accuracy_menu")
     builder.button(text="🔄 Обновить данные", callback_data="refresh_data")
     builder.button(text="💳 Подписка", callback_data="subscription_info")
     builder.button(text="🔙 Вернуться в главное меню", callback_data="back_to_main")
+    builder.adjust(1)
+    return builder.as_markup()
+
+def get_speed_kb():
+    builder = InlineKeyboardBuilder()
+    speeds = [1, 5, 10, 15, 20, 25]
+    for s in speeds:
+        builder.button(text=f"{s} мин", callback_data=f"save_speed_{s}")
+    builder.button(text="🔙 Назад", callback_data="back_to_settings")
+    builder.adjust(3, 3, 1)
+    return builder.as_markup()
+
+def get_accuracy_kb():
+    builder = InlineKeyboardBuilder()
+    builder.button(text="🥉 Обычный (80%)", callback_data="save_acc_modest")
+    builder.button(text="🥈 Перспективный (90%)", callback_data="save_acc_advanced")
+    builder.button(text="🥇 Отличник (100%)", callback_data="save_acc_excellent")
+    builder.button(text="🔙 Назад", callback_data="back_to_settings")
     builder.adjust(1)
     return builder.as_markup()
 
@@ -233,7 +256,12 @@ async def support_main(message: types.Message, state: FSMContext):
 
 @dp.message(F.text == "⚙️ Настройки")
 async def settings_start(message: types.Message, state: FSMContext):
-    await message.answer("⚙️ **Настройки бота:**", reply_markup=get_settings_kb())
+    user = db.get_user(message.from_user.id)
+    await message.answer(
+        "⚙️ **Настройки бота:**\n\n"
+        "Здесь можно настроить скорость решения тестов и желаемую точность ответов.",
+        reply_markup=get_settings_kb(user.get('solve_delay', 15), user.get('accuracy_mode', 'excellent'))
+    )
     await state.set_state(BotStates.SETTINGS)
 
 # ─── CALLBACK ХЕНДЛЕРЫ ───
@@ -489,6 +517,61 @@ async def subscription_info(call: types.CallbackQuery):
 @dp.callback_query(F.data == "back_to_settings")
 async def back_to_settings(call: types.CallbackQuery, state: FSMContext):
     await call.message.edit_text("⚙️ **Настройки бота:**", reply_markup=get_settings_kb(), parse_mode="Markdown")
+
+# ─── НАСТРОЙКИ: СКОРОСТЬ И ТОЧНОСТЬ ───
+
+@dp.callback_query(F.data == "set_speed_menu")
+async def speed_menu(call: types.CallbackQuery):
+    await call.message.edit_text(
+        "⏱ **Настройка скорости решения**\n\n"
+        "Выберите время задержки перед отправкой ответов. "
+        "Это помогает имитировать поведение человека.\n\n"
+        "По умолчанию: **15 минут**",
+        reply_markup=get_speed_kb(),
+        parse_mode="Markdown"
+    )
+
+@dp.callback_query(F.data.startswith("save_speed_"))
+async def save_speed(call: types.CallbackQuery):
+    speed = int(call.data.replace("save_speed_", ""))
+    db.update_user(call.from_user.id, solve_delay=speed)
+    user = db.get_user(call.from_user.id)
+    await call.answer(f"✅ Скорость установлена: {speed} мин")
+    await call.message.edit_text(
+        "⚙️ **Настройки бота:**",
+        reply_markup=get_settings_kb(user.get('solve_delay'), user.get('accuracy_mode')),
+        parse_mode="Markdown"
+    )
+
+@dp.callback_query(F.data == "set_accuracy_menu")
+async def accuracy_menu(call: types.CallbackQuery):
+    await call.message.edit_text(
+        "🎯 **Выбор режима точности**\n\n"
+        "Выберите желаемый процент правильных ответов для ваших тестов:",
+        reply_markup=get_accuracy_kb(),
+        parse_mode="Markdown"
+    )
+
+@dp.callback_query(F.data.startswith("save_acc_"))
+async def save_accuracy(call: types.CallbackQuery):
+    mode = call.data.replace("save_acc_", "")
+    db.update_user(call.from_user.id, accuracy_mode=mode)
+    user = db.get_user(call.from_user.id)
+    await call.answer("✅ Режим точности обновлен")
+    await call.message.edit_text(
+        "⚙️ **Настройки бота:**",
+        reply_markup=get_settings_kb(user.get('solve_delay'), user.get('accuracy_mode')),
+        parse_mode="Markdown"
+    )
+
+@dp.callback_query(F.data == "back_to_settings")
+async def back_to_settings(call: types.CallbackQuery, state: FSMContext):
+    user = db.get_user(call.from_user.id)
+    await call.message.edit_text(
+        "⚙️ **Настройки бота:**",
+        reply_markup=get_settings_kb(user.get('solve_delay', 15), user.get('accuracy_mode', 'excellent')),
+        parse_mode="Markdown"
+    )
 
 # ─── ЗАПУСК ───
 
