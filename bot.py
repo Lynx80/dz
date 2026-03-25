@@ -59,9 +59,10 @@ async def handle_menu_click(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         )
         
         keyboard = [
-            [InlineKeyboardButton("🏙 Москва (МЭШ)", url="https://school.mos.ru/api/family/web/v1/auth/token")],
-            [InlineKeyboardButton("🌍 МО: Войти", url="https://myschool.mosreg.ru/")],
-            [InlineKeyboardButton("🔑 МО: Получить токен", url="https://myschool.mosreg.ru/api/v1/auth/token")],
+            [InlineKeyboardButton("🏙 Москва: 1. Войти", url="https://school.mos.ru/")],
+            [InlineKeyboardButton("🏙 Москва: 2. Получить токен", url="https://school.mos.ru/api/family/web/v1/auth/token")],
+            [InlineKeyboardButton("🌍 МО: 1. Войти", url="https://myschool.mosreg.ru/")],
+            [InlineKeyboardButton("🌍 МО: 2. Получить токен", url="https://myschool.mosreg.ru/api/token")],
             [InlineKeyboardButton("◀️ Вернуться в меню", callback_data="main_menu")]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
