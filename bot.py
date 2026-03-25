@@ -68,16 +68,6 @@ async def handle_menu_click(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         
         await update.message.reply_text(instruction, parse_mode="Markdown", reply_markup=reply_markup)
         return WAITING_TOKEN
-
-async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    query = update.callback_query
-    await query.answer()
-    if query.data == "main_menu":
-        await _cleanup_browser(context)
-        reply_markup = ReplyKeyboardMarkup(MAIN_MENU_KBD, resize_keyboard=True)
-        await query.message.reply_text("Вы вернулись в главное меню:", reply_markup=reply_markup)
-        return WAITING_ACTION
-    return WAITING_TOKEN
     elif text == "💻 Мои ЦДЗ тесты":
         await update.message.reply_text("Список ваших тестов пока пуст.")
         return WAITING_ACTION
@@ -89,6 +79,16 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     else:
         await update.message.reply_text("Пожалуйста, используйте кнопки меню.")
         return WAITING_ACTION
+
+async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    query = update.callback_query
+    await query.answer()
+    if query.data == "main_menu":
+        await _cleanup_browser(context)
+        reply_markup = ReplyKeyboardMarkup(MAIN_MENU_KBD, resize_keyboard=True)
+        await query.message.reply_text("Вы вернулись в главное меню:", reply_markup=reply_markup)
+        return WAITING_ACTION
+    return WAITING_TOKEN
 
 async def receive_token(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     token = update.message.text.strip()
