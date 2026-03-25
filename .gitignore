@@ -1,4 +1,6 @@
 .env
+database.db
 __pycache__/
-*.tar.gz
 *.pyc
+.vscode/
+.idea/
