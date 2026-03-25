@@ -14,6 +14,7 @@ class Database:
     def _create_tables(self):
         with self._get_connection() as conn:
             cursor = conn.cursor()
+            # Таблица пользователей с расширенными настройками
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS users (
                     user_id INTEGER PRIMARY KEY,
@@ -21,20 +22,36 @@ class Database:
                     last_name TEXT,
                     grade TEXT,
                     token_mos TEXT,
-                    token_mo TEXT,
                     student_id TEXT,
                     tests_solved INTEGER DEFAULT 0,
                     avg_score REAL DEFAULT 0,
-                    speed TEXT DEFAULT 'normal',
-                    ai_enabled INTEGER DEFAULT 1
+                    mode TEXT DEFAULT 'fast', -- eco, fast, precise
+                    api_limits INTEGER DEFAULT 100,
+                    auto_solve INTEGER DEFAULT 0,
+                    cache_enabled INTEGER DEFAULT 1,
+                    logs_enabled INTEGER DEFAULT 1,
+                    language TEXT DEFAULT 'ru'
                 )
             """)
+            # Таблица кеша ответов ИИ (для экономии токенов)
             cursor.execute("""
-                CREATE TABLE IF NOT EXISTS tests (
+                CREATE TABLE IF NOT EXISTS ai_cache (
+                    question_hash TEXT PRIMARY KEY,
+                    question_text TEXT,
+                    options_json TEXT,
+                    answer_text TEXT,
+                    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            # История решений и статистика
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS stats_history (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     user_id INTEGER,
-                    test_url TEXT,
-                    score TEXT,
+                    subject TEXT,
+                    task_type TEXT,
+                    success INTEGER,
+                    tokens_saved INTEGER DEFAULT 0,
                     timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
                     FOREIGN KEY (user_id) REFERENCES users (user_id)
                 )
@@ -77,21 +94,54 @@ class Database:
             cursor.execute("DELETE FROM users WHERE user_id = ?", (user_id,))
             conn.commit()
 
-    def add_test_score(self, user_id, test_url, score_str):
-        # score_str example: "8/10" or "85%"
+    def get_answer_cache(self, question_text, options):
+        import hashlib
+        options_json = json.dumps(options, sort_keys=True)
+        q_hash = hashlib.sha256(f"{question_text}{options_json}".encode()).hexdigest()
+        
         with self._get_connection() as conn:
             cursor = conn.cursor()
-            # Добавляем в историю
+            cursor.execute("SELECT answer_text FROM ai_cache WHERE question_hash = ?", (q_hash,))
+            row = cursor.fetchone()
+            return row[0] if row else None
+
+    def set_answer_cache(self, question_text, options, answer_text):
+        import hashlib
+        options_json = json.dumps(options, sort_keys=True)
+        q_hash = hashlib.sha256(f"{question_text}{options_json}".encode()).hexdigest()
+        
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
             cursor.execute("""
-                INSERT INTO tests (user_id, test_url, score)
-                VALUES (?, ?, ?)
-            """, (user_id, test_url, score_str))
-            
-            # Обновляем статистику пользователя
+                INSERT OR REPLACE INTO ai_cache (question_hash, question_text, options_json, answer_text)
+                VALUES (?, ?, ?, ?)
+            """, (q_hash, question_text, options_json, answer_text))
+            conn.commit()
+
+    def get_stats(self, user_id):
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
             cursor.execute("SELECT tests_solved, avg_score FROM users WHERE user_id = ?", (user_id,))
-            solved, current_avg = cursor.fetchone()
+            row = cursor.fetchone()
+            if not row: return {"solved": 0, "avg": 0, "saved": 0}
             
-            # Парсим числовое значение из score_str для расчета среднего если возможно
+            cursor.execute("SELECT SUM(tokens_saved) FROM stats_history WHERE user_id = ?", (user_id,))
+            saved = cursor.fetchone()[0] or 0
+            return {"solved": row[0], "avg": round(row[1], 1), "saved": saved}
+
+    def add_stats(self, user_id, subject, task_type, success=1, tokens_saved=0):
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT INTO stats_history (user_id, subject, task_type, success, tokens_saved)
+                VALUES (?, ?, ?, ?, ?)
+            """, (user_id, subject, task_type, success, tokens_saved))
+            conn.commit()
+
+    def add_test_score(self, user_id, test_url, score_str):
+        # Сохраняем в историю и обновляем агрегаты
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
             try:
                 if "/" in score_str:
                     num, den = map(float, score_str.split("/"))
@@ -100,21 +150,20 @@ class Database:
                     numeric_score = float(score_str.replace("%", ""))
                 else:
                     numeric_score = float(score_str)
-                
-                new_avg = (current_avg * solved + numeric_score) / (solved + 1)
             except:
-                new_avg = current_avg
+                numeric_score = 0
 
+            cursor.execute("SELECT tests_solved, avg_score FROM users WHERE user_id = ?", (user_id,))
+            row = cursor.fetchone()
+            solved, current_avg = row if row else (0, 0)
+            
+            new_avg = (current_avg * solved + numeric_score) / (solved + 1)
+            
             cursor.execute("""
                 UPDATE users 
-                SET tests_solved = tests_solved + 1, 
-                    avg_score = ?
+                SET tests_solved = tests_solved + 1, avg_score = ?
                 WHERE user_id = ?
             """, (new_avg, user_id))
+            
+            self.add_stats(user_id, "Тест", "auto_solve", success=1, tokens_saved=500)
             conn.commit()
-
-    def get_user_tests(self, user_id):
-        with self._get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute("SELECT test_url, score, timestamp FROM tests WHERE user_id = ? ORDER BY timestamp DESC", (user_id,))
-            return cursor.fetchall()
