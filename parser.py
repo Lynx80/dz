@@ -315,7 +315,26 @@ class ParserService:
                         self.db.set_answer_cache(question_text, options_texts, str(ans_val))
                     
                     idx = self._match_index(ans_val, options_texts)
+                    
+                    # Применяем точность решения
+                    acc_mode = user.get('accuracy_mode', 'excellent')
+                    import random
+                    chance = random.random()
+                    target_reached = False
+                    if acc_mode == 'modest' and chance > 0.8: # 20% шанс ошибки
+                        wrong_indices = [i for i in range(len(options_elements)) if i != idx]
+                        if wrong_indices: idx = random.choice(wrong_indices)
+                    elif acc_mode == 'advanced' and chance > 0.9: # 10% шанс ошибки
+                        wrong_indices = [i for i in range(len(options_elements)) if i != idx]
+                        if wrong_indices: idx = random.choice(wrong_indices)
+
                     if idx != -1: await options_elements[idx].click()
+                    
+                    # Имитируем "человеческое" время раздумья
+                    delay = user.get('solve_delay', 15)
+                    # Если задержка 15 мин на 10-15 вопросов, то это ~1 мин на вопрос
+                    await asyncio.sleep(random.uniform(delay * 2, delay * 4)) 
+
                     next_btn = await page.query_selector("button:has-text('Далее'), .btn-next")
                     if next_btn: await next_btn.click()
                     else: await page.keyboard.press("Enter")
@@ -403,7 +422,7 @@ class ParserService:
                         # Тут можно добавить логику для ввода текста
                         break
 
-                    # Спрашиваем ИИ (сначала кэш)
+                     # Спрашиваем ИИ (сначала кэш)
                     ans_val = self.db.get_answer_cache(question_text, options_texts)
                     if not ans_val:
                         ai_res = await self.ai.get_answer(question_text, options_texts)
@@ -413,9 +432,28 @@ class ParserService:
                         if status_callback: await status_callback(f"♻️ Использую кэш для вопроса {q_num}...")
                     
                     idx = self._match_index(ans_val, options_texts)
+                    
+                    # Применяем точность решения
+                    acc_mode = user.get('accuracy_mode', 'excellent')
+                    import random
+                    chance = random.random()
+                    if acc_mode == 'modest' and chance > 0.8: # 20% шанс ошибки
+                        wrong_indices = [i for i in range(len(options_elements)) if i != idx]
+                        if wrong_indices: idx = random.choice(wrong_indices)
+                    elif acc_mode == 'advanced' and chance > 0.9: # 10% шанс ошибки
+                        wrong_indices = [i for i in range(len(options_elements)) if i != idx]
+                        if wrong_indices: idx = random.choice(wrong_indices)
+
                     if idx != -1:
                         await options_elements[idx].click()
                         await asyncio.sleep(1)
+                    
+                    # Имитируем "человеческое" время раздумья (по дефолту 15 мин на тест)
+                    # Если в тесте ~15 вопросов, то это 1 мин на вопрос.
+                    delay_min = user.get('solve_delay', 15)
+                    # Формула: (delay_min * 60 / 15 questions) * random_factor
+                    sleep_time = random.uniform(delay_min * 2, delay_min * 5) 
+                    await asyncio.sleep(sleep_time)
                     
                     # Кликаем "Далее" или "Ответить"
                     next_btn = await page.query_selector("button:has-text('Далее'), button:has-text('Ответить'), .next-btn")
