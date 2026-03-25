@@ -1,371 +1,360 @@
-import os
 import asyncio
 import logging
-from io import BytesIO
-
+import os
+from datetime import datetime, timedelta
 from dotenv import load_dotenv
-from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeout
-from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import (
-    Application,
-    CommandHandler,
-    MessageHandler,
-    ConversationHandler,
-    CallbackQueryHandler,
-    ContextTypes,
-    filters,
-)
+from aiogram import Bot, Dispatcher, types, F
+from aiogram.filters import Command
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.storage.memory import MemoryStorage
+from aiogram.utils.keyboard import ReplyKeyboardBuilder, InlineKeyboardBuilder
+from aiogram.client.session.aiohttp import AiohttpSession
+
+from database import Database
+from parser import ParserService
 
 load_dotenv()
 
-logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    level=logging.INFO,
-)
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-WAITING_ACTION, WAITING_URL, WAITING_TOKEN, WAITING_LASTNAME, WAITING_FIRSTNAME, WAITING_CLASS, WAITING_AUTH = range(7)
+dp = Dispatcher(storage=MemoryStorage())
+db = Database()
+parser = ParserService()
 
-MAIN_MENU_KBD = [
-    ["📄 Получить ответы", "🤖 Авторешение"],
-    ["💻 Мои ЦДЗ тесты", "⚙️ Настройки"],
-    ["🆘 Помощь", "❌ Отмена"]
-]
+# ─── КЛАВИАТУРЫ ───
 
+def get_main_menu():
+    builder = ReplyKeyboardBuilder()
+    builder.button(text="👤 Мой профиль")
+    builder.button(text="📚 Список ЦДЗ")
+    builder.button(text="📖 Решить тест")
+    builder.button(text="❓ Как войти")
+    builder.adjust(2)
+    return builder.as_markup(resize_keyboard=True)
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    await _cleanup_browser(context)
-    reply_markup = ReplyKeyboardMarkup(MAIN_MENU_KBD, resize_keyboard=True)
-    await update.message.reply_text(
-        "👋 Привет! Я помогу тебе с решением ЦДЗ.\nВыбери действие в меню:",
-        reply_markup=reply_markup
+def get_profile_kb():
+    builder = InlineKeyboardBuilder()
+    builder.button(text="🔄 Обновить данные", callback_data="sync_profile")
+    builder.button(text="🗑️ Сбросить токен", callback_data="reset_token")
+    builder.adjust(1)
+    return builder.as_markup()
+
+def get_region_kb():
+    builder = InlineKeyboardBuilder()
+    builder.button(text="🏙️ Москва (МЭШ)", callback_data="region_mos")
+    builder.button(text="🌲 Область (Мосрег)", callback_data="region_mo")
+    builder.adjust(1)
+    return builder.as_markup()
+
+def get_hw_kb():
+    """Динамические даты для выбора ЦДЗ."""
+    today = datetime.now()
+    tomorrow = today + timedelta(days=1)
+    
+    builder = InlineKeyboardBuilder()
+    builder.button(
+        text=f"📅 Сегодня ({today.strftime('%d.%m')})",
+        callback_data=f"hw_date_{today.strftime('%Y-%m-%d')}"
     )
-    return WAITING_ACTION
+    builder.button(
+        text=f"📅 Завтра ({tomorrow.strftime('%d.%m')})",
+        callback_data=f"hw_date_{tomorrow.strftime('%Y-%m-%d')}"
+    )
+    builder.adjust(1)
+    return builder.as_markup()
 
-async def handle_menu_click(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    text = update.message.text
-    if text == "🤖 Авторешение" or text == "📄 Получить ответы":
-        await update.message.reply_text("Введите URL страницы с тестом (МЭШ/ЦДЗ):", reply_markup=ReplyKeyboardRemove())
-        return WAITING_URL
-    elif text == "⚙️ Настройки":
-        instruction = (
-            "⚠️ **Мяу-мяу! Токен не загружен!** 😿\n\n"
-            "🐱 Токен — это твой цифровой ключ! Он дает робокоту доступ к тестам! 🔑\n\n"
-            "🔑 **Как получить токен:**\n\n"
-            "1️⃣ Перейди по ссылке ниже.\n"
-            "2️⃣ Введи логин и пароль от своего аккаунта.\n"
-            "3️⃣ Скопируй токен со страницы (начинается с `eyJhb...`).\n"
-            "4️⃣ Отправь его мне ответным сообщением! 🚀"
-        )
-        
-        keyboard = [
-            [InlineKeyboardButton("🏙 Москва: Получить токен", url="https://school.mos.ru/?backUrl=https%3A%2F%2Fschool.mos.ru%2Fv2%2Ftoken%2Frefresh")],
-            [InlineKeyboardButton("🌍 МО: 1. Войти", url="https://authedu.mosreg.ru/")],
-            [InlineKeyboardButton("🌍 МО: 2. Получить токен", url="https://authedu.mosreg.ru/v2/token/refresh")],
-            [InlineKeyboardButton("◀️ Вернуться в меню", callback_data="main_menu")]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        await update.message.reply_text(instruction, parse_mode="Markdown", reply_markup=reply_markup)
-        return WAITING_TOKEN
-    elif text == "💻 Мои ЦДЗ тесты":
-        await update.message.reply_text("Список ваших тестов пока пуст.")
-        return WAITING_ACTION
-    elif text == "🆘 Помощь":
-        await update.message.reply_text("Этот бот помогает решать тесты ЦДЗ. Для начала нажмите 'Авторешение'.")
-        return WAITING_ACTION
-    elif text == "❌ Отмена":
-        return await cancel(update, context)
-    else:
-        await update.message.reply_text("Пожалуйста, используйте кнопки меню.")
-        return WAITING_ACTION
+# ─── КОМАНДЫ ───
 
-async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    query = update.callback_query
-    await query.answer()
-    if query.data == "main_menu":
-        await _cleanup_browser(context)
-        reply_markup = ReplyKeyboardMarkup(MAIN_MENU_KBD, resize_keyboard=True)
-        await query.message.reply_text("Вы вернулись в главное меню:", reply_markup=reply_markup)
-        return WAITING_ACTION
-    return WAITING_TOKEN
-
-async def receive_token(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    token = update.message.text.strip()
-    context.user_data["auth_token"] = token
-    await update.message.reply_text("✅ Токен сохранен! Теперь введите URL теста:")
-    return WAITING_URL
-
-
-async def receive_url(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    url = update.message.text.strip()
-    context.user_data["url"] = url
-    await update.message.reply_text("Введите фамилию:")
-    return WAITING_LASTNAME
-
-async def receive_lastname(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    context.user_data["lastname"] = update.message.text.strip()
-    await update.message.reply_text("Введите имя:")
-    return WAITING_FIRSTNAME
-
-async def receive_firstname(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    context.user_data["firstname"] = update.message.text.strip()
-    await update.message.reply_text("Класс или группа, например 4 «А»")
-    return WAITING_CLASS
-
-async def receive_class(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    context.user_data["classTxt"] = update.message.text.strip()
-    url = context.user_data.get("url")
-
-    await update.message.reply_text("Открываю страницу...")
-
-    try:
-        playwright = await async_playwright().start()
-        browser = await playwright.chromium.launch(
-            headless=True,
-            args=[
-                "--no-sandbox",
-                "--disable-setuid-sandbox",
-                "--disable-dev-shm-usage",
-                "--disable-blink-features=AutomationControlled",
-            ],
-        )
-        ctx = await browser.new_context(
-            user_agent=(
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/122.0.0.0 Safari/537.36"
-            ),
-            viewport={"width": 1280, "height": 800},
-            locale="ru-RU",
-        )
-        page = await ctx.new_page()
-        # Скрываем признаки автоматизации
-        await page.add_init_script(
-            "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
+@dp.message(Command("start"))
+async def send_welcome(message: types.Message, state: FSMContext):
+    await state.clear()
+    user = db.get_user(message.from_user.id)
+    if not user:
+        db.create_user(message.from_user.id, first_name="Друг")
+    
+    await message.answer(
+        "Привет! 👋 Я твой помощник по школьным тестам.\n"
+        "Помогу найти и решить задания из ЦДЗ.",
+        reply_markup=get_main_menu(),
+        parse_mode="Markdown"
+    )
+    
+    updated_user = db.get_user(message.from_user.id)
+    if not updated_user or not (updated_user.get('token_mo') or updated_user.get('token_mos')):
+        await message.answer(
+            "⚠️ **Токен не найден**\nДля начала работы подключите ваш аккаунт:",
+            reply_markup=get_region_kb()
         )
 
-        context.user_data["playwright"] = playwright
-        context.user_data["browser"] = browser
-        context.user_data["ctx"] = ctx
-        context.user_data["page"] = page
+@dp.message(Command("restart"))
+async def full_restart(message: types.Message, state: FSMContext):
+    db.delete_user(message.from_user.id)
+    await state.clear()
+    await message.answer("♻️ **Все данные сброшены!**")
+    await send_welcome(message, state)
 
-        await page.goto(url, timeout=45_000, wait_until="domcontentloaded")
-        
-        # Если есть сохраненный токен, пробуем его применить (упрощенная логика)
-        auth_token = context.user_data.get("auth_token")
-        if auth_token:
-            # Пытаемся добавить токен в localStorage или cookies в зависимости от платформы
-            await page.evaluate(f"localStorage.setItem('auth_token', '{auth_token}')")
-            # Для МЭШ часто используется кука CMS-SESSION
-            await ctx.add_cookies([{"name": "CMS-SESSION", "value": auth_token, "url": url}])
-            await page.reload(wait_until="domcontentloaded")
-        
-        if "videouroki.net/tests/" in url:
-            # Заполняем форму
-            try:
-                await page.fill('input[name="lastname"]', context.user_data.get("lastname", ""))
-                await page.fill('input[name="firstname"]', context.user_data.get("firstname", ""))
-                await page.fill('input[name="classTxt"]', context.user_data.get("classTxt", ""))
-                await page.click('input[value="Начать тест"]')
-                await page.wait_for_timeout(3000)
-                
-                # Скриншот после входа в тест
-                screen_start = await page.screenshot(full_page=False)
-                await update.message.reply_photo(photo=BytesIO(screen_start), caption="Успешно зашел в тест! Начинаю решать...")
+# ─── КАК ВОЙТИ ───
 
-                import re
-                for i in range(1, 11):
-                    # Пробуем выбрать первый вариант ответа на текущей странице 
-                    try:
-                        opt = page.locator(".el-radio, .el-checkbox, label:has(input)").first
-                        if await opt.count() > 0:
-                            await opt.click(force=True)
-                        else:
-                            # Если это текстовое поле ввода
-                            inp = page.locator('input.el-input__inner').first
-                            if await inp.count() > 0:
-                                await inp.fill("А")
-                    except Exception:
-                        pass
-                    
-                    # Делаем скриншот с ответом
-                    screen_q = await page.screenshot(full_page=False)
-                    await update.message.reply_photo(photo=BytesIO(screen_q), caption=f"Вопрос {i}: Ответ выбран.")
-                    
-                    # Нажимаем Далее/Сохранить
-                    try:
-                        btn = page.locator('button, .btn, a.btn').filter(has_text=re.compile(r"Далее|Ответить|Сохранить", re.IGNORECASE)).first
-                        if await btn.count() > 0:
-                            await btn.click()
-                        else:
-                            # Если кнопок нет, возможно конец теста
-                            break
-                    except Exception:
-                        break
-                        
-                    await page.wait_for_timeout(2000)
-                
-                # Итоговый скриншот
-                await page.wait_for_timeout(2000)
-                screen_end = await page.screenshot(full_page=False)
-                await update.message.reply_photo(photo=BytesIO(screen_end), caption="Завершил 10 шагов!")
-                
-            except Exception as e:
-                await update.message.reply_text(f"Ошибка в процессе прохождения теста: {e}")
-                
-            # Завершаем диалог
-            return ConversationHandler.END
+@dp.message(F.text == "❓ Как войти")
+async def help_command(message: types.Message):
+    await message.answer("📍 **Выберите ваш регион:**", reply_markup=get_region_kb())
 
-        # Для других сайтов - логика QR-кода
-        try:
-            await page.wait_for_selector("img, canvas", timeout=15_000)
-        except Exception:
-            pass
+@dp.callback_query(F.data == "region_mo")
+async def step1_mo(callback: types.CallbackQuery):
+    text = (
+        "🌲 **ШАГ 1: Вход в Мосрег**\n\n"
+        "Авторизуйтесь в системе «Моя Школа» через кнопку ниже."
+    )
+    kb = InlineKeyboardBuilder()
+    kb.button(text="🌐 1. Войти в дневник", url="https://authedu.mosreg.ru/")
+    kb.button(text="🔑 2. Я вошел, получить токен", callback_data="step2_mo")
+    kb.button(text="🔙 Назад", callback_data="back_to_regions")
+    kb.adjust(1)
+    await callback.message.edit_text(text, reply_markup=kb.as_markup(), parse_mode="Markdown")
 
-        qr_image_data = await _find_qr_image(page)
+@dp.callback_query(F.data == "step2_mo")
+async def step2_mo(callback: types.CallbackQuery):
+    text = (
+        "🌲 **ШАГ 2: Получение токена**\n\n"
+        "1. Нажмите кнопку ниже — откроется страница с токеном.\n"
+        "2. Скопируйте длинный код (начинается на `eyJ...`).\n"
+        "3. Пришлите его мне сообщением.\n\n"
+        "⚠️ Если страница не открывается или выдаёт ошибку — "
+        "вернитесь к Шагу 1 и убедитесь, что вы вошли в дневник."
+    )
+    kb = InlineKeyboardBuilder()
+    kb.button(text="🔑 Получить токен", url="https://authedu.mosreg.ru/v2/token/refresh")
+    kb.button(text="🔙 Назад", callback_data="region_mo")
+    kb.adjust(1)
+    await callback.message.edit_text(text, reply_markup=kb.as_markup(), parse_mode="Markdown")
 
-        if qr_image_data is None:
-            qr_image_data = await page.screenshot(full_page=False)
-            caption = "QR-код не найден — скриншот страницы.\nОтсканируйте QR-код для авторизации"
-        else:
-            caption = "Отсканируйте этот QR-код для авторизации"
+@dp.callback_query(F.data == "region_mos")
+async def step1_mos(callback: types.CallbackQuery):
+    text = (
+        "🏙️ **ШАГ 1: Вход в МЭШ**\n\n"
+        "Авторизуйтесь в Московской Электронной Школе."
+    )
+    kb = InlineKeyboardBuilder()
+    kb.button(text="🌐 1. Войти в МЭШ", url="https://school.mos.ru")
+    kb.button(text="🔑 2. Я вошел, получить токен", callback_data="step2_mos")
+    kb.button(text="🔙 Назад", callback_data="back_to_regions")
+    kb.adjust(1)
+    await callback.message.edit_text(text, reply_markup=kb.as_markup(), parse_mode="Markdown")
 
-        await update.message.reply_photo(
-            photo=BytesIO(qr_image_data),
-            caption=caption,
-        )
-        await update.message.reply_text(
-            "Жду подтверждения авторизации. Когда войдёте — отправьте /authorized"
-        )
-        return WAITING_AUTH
+@dp.callback_query(F.data == "step2_mos")
+async def step2_mos(callback: types.CallbackQuery):
+    text = (
+        "🏙️ **ШАГ 2: Получение токена**\n\n"
+        "В МЭШ токен можно найти через F12 → Local Storage сайта school.mos.ru.\n"
+        "Скопируйте `auth_token` и пришлите его мне."
+    )
+    kb = InlineKeyboardBuilder()
+    kb.button(text="🔙 Назад", callback_data="region_mos")
+    kb.adjust(1)
+    await callback.message.edit_text(text, reply_markup=kb.as_markup(), parse_mode="Markdown")
 
-    except PlaywrightTimeout:
-        await update.message.reply_text(
-            "⚠️ Таймаут: страница не загрузилась за 45 секунд. Проверьте URL и попробуйте снова /start"
-        )
-        await _cleanup_browser(context)
-        return ConversationHandler.END
+@dp.callback_query(F.data == "back_to_regions")
+async def back_to_regions(callback: types.CallbackQuery):
+    await callback.message.edit_text("📍 **Выберите ваш регион:**", reply_markup=get_region_kb())
 
-    except Exception as e:
-        logger.exception("Ошибка при открытии страницы")
-        await update.message.reply_text(
-            f"❌ Ошибка при открытии страницы: {e}\n\nПопробуйте снова /start"
-        )
-        await _cleanup_browser(context)
-        return ConversationHandler.END
+# ─── ПРОФИЛЬ ───
 
+@dp.message(F.text == "👤 Мой профиль")
+async def show_profile(message: types.Message):
+    user = db.get_user(message.from_user.id)
+    if not user:
+        db.create_user(message.from_user.id, first_name="Друг")
+        user = db.get_user(message.from_user.id)
+    
+    has_token = "✅ Привязан" if user.get('token_mo') or user.get('token_mos') else "❌ Не привязан"
+    first_name = user.get('first_name') or "Друг"
+    last_name = user.get('last_name') or ""
 
-async def authorized(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    await update.message.reply_text("✅ Авторизация принята! Можно продолжать.")
-    # Браузер остаётся открытым для дальнейшей работы с тестом
-    return ConversationHandler.END
+    text = (
+        f"🙋 **Твой профиль**\n"
+        f"━━━━━━━━━━━━━━━\n"
+        f"👤 **Имя**: {first_name} {last_name}\n"
+        f"🎓 **Класс**: {user.get('grade') or '—'}\n"
+        f"🔑 **Аккаунт**: {has_token}\n"
+        f"📊 **Решено**: {user.get('tests_solved', 0)}\n"
+        f"⭐ **Ср. балл**: {user.get('avg_score', 0):.1f}%"
+    )
+    await message.answer(text, reply_markup=get_profile_kb(), parse_mode="Markdown")
 
-
-async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    await _cleanup_browser(context)
-    await update.message.reply_text("Сессия сброшена. Для начала отправьте /start")
-    return ConversationHandler.END
-
-
-async def _find_qr_image(page) -> bytes | None:
-    """
-    Ищет QR-код на странице:
-    1. img с src содержащим 'qr'
-    2. img с alt/class содержащим 'qr'
-    3. canvas-элемент (QR часто рендерится через canvas)
-    Возвращает bytes изображения или None.
-    """
-    # Ищем <img> похожий на QR по атрибутам
-    selectors = [
-        "img[src*='qr' i]",
-        "img[alt*='qr' i]",
-        "img[class*='qr' i]",
-        "img[id*='qr' i]",
-        "canvas[class*='qr' i]",
-        "canvas[id*='qr' i]",
-    ]
-    for selector in selectors:
-        element = await page.query_selector(selector)
-        if element:
-            try:
-                return await element.screenshot()
-            except Exception:
-                continue
-
-    # Если ничего не нашли — берём первый заметный canvas
-    canvas = await page.query_selector("canvas")
-    if canvas:
-        try:
-            return await canvas.screenshot()
-        except Exception:
-            pass
-
-    return None
-
-
-async def _cleanup_browser(context: ContextTypes.DEFAULT_TYPE):
-    """Закрывает browser и playwright если они открыты."""
-    browser = context.user_data.pop("browser", None)
-    playwright = context.user_data.pop("playwright", None)
-    context.user_data.pop("ctx", None)
-    context.user_data.pop("page", None)
-
-    if browser:
-        try:
-            await browser.close()
-        except Exception:
-            pass
-    if playwright:
-        try:
-            await playwright.stop()
-        except Exception:
-            pass
-
-
-def main():
-    token = os.getenv("TELEGRAM_BOT_TOKEN")
+@dp.callback_query(F.data == "sync_profile")
+async def sync_profile(callback: types.CallbackQuery):
+    user = db.get_user(callback.from_user.id)
+    token = user.get('token_mo') or user.get('token_mos')
     if not token:
-        print("Error: TELEGRAM_BOT_TOKEN not found in .env file")
+        await callback.answer("⚠️ Токен не найден!", show_alert=True)
         return
+    
+    await callback.message.edit_text("🔄 Обновляю данные...")
+    profile = await parser.fetch_mosreg_profile(token)
+    if not profile:
+        profile = await parser.fetch_mesh_profile(token)
+    
+    if profile:
+        db.update_user(callback.from_user.id, **profile)
+        user = db.get_user(callback.from_user.id)
+        text = (
+            f"🙋 **Твой профиль**\n"
+            f"━━━━━━━━━━━━━━━\n"
+            f"👤 **Имя**: {user.get('first_name')} {user.get('last_name', '')}\n"
+            f"🎓 **Класс**: {user.get('grade') or '—'}\n"
+            f"🔑 **Аккаунт**: ✅ Привязан\n"
+            f"📊 **Решено**: {user.get('tests_solved', 0)}\n"
+            f"⭐ **Ср. балл**: {user.get('avg_score', 0):.1f}%"
+        )
+        await callback.message.edit_text(text, reply_markup=get_profile_kb(), parse_mode="Markdown")
+        await callback.answer("Обновлено!")
+    else:
+        await callback.message.edit_text("❌ Не удалось получить данные.", reply_markup=get_profile_kb())
 
-    # Увеличиваем таймауты для стабильности при плохом соединении
-    app = Application.builder().token(token).connect_timeout(30).read_timeout(30).build()
+@dp.callback_query(F.data == "reset_token")
+async def reset_token_callback(callback: types.CallbackQuery):
+    db.update_user(callback.from_user.id,
+                   token_mo=None, token_mos=None, student_id=None,
+                   first_name="Друг", last_name="", grade=None)
+    text = (
+        "🙋 **Твой профиль**\n"
+        "━━━━━━━━━━━━━━━\n"
+        "👤 **Имя**: Друг\n"
+        "🎓 **Класс**: —\n"
+        "🔑 **Аккаунт**: ❌ Не привязан\n"
+        "📊 **Решено**: 0\n"
+        "⭐ **Ср. балл**: 0.0%"
+    )
+    await callback.message.edit_text(text, reply_markup=get_profile_kb(), parse_mode="Markdown")
+    await callback.answer("Токен сброшен!")
 
-    conv_handler = ConversationHandler(
-        entry_points=[CommandHandler("start", start)],
-        states={
-            WAITING_ACTION: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_menu_click)
-            ],
-            WAITING_URL: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, receive_url)
-            ],
-            WAITING_TOKEN: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, receive_token),
-                CallbackQueryHandler(handle_callback)
-            ],
-            WAITING_LASTNAME: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, receive_lastname)
-            ],
-            WAITING_FIRSTNAME: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, receive_firstname)
-            ],
-            WAITING_CLASS: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, receive_class)
-            ],
-            WAITING_AUTH: [
-                CommandHandler("authorized", authorized),
-            ],
-        },
-        fallbacks=[CommandHandler("cancel", cancel)],
+# ─── РЕШИТЬ / ЦДЗ ───
+
+@dp.message(F.text == "📖 Решить тест")
+async def solve_test_command(message: types.Message):
+    user = db.get_user(message.from_user.id)
+    token = user.get('token_mo') or user.get('token_mos') if user else None
+    if not token:
+        await message.answer(
+            "⛔ **Доступ ограничен**\n"
+            "Сначала привяжите аккаунт через раздел «❓ Как войти».",
+            reply_markup=get_region_kb()
+        )
+        return
+    await message.answer("Пришлите ссылку на тест (Videouroki или МЭШ), и я его решу! 🤖")
+
+@dp.message(F.text == "📚 Список ЦДЗ")
+async def homework_menu(message: types.Message):
+    user = db.get_user(message.from_user.id)
+    token = user.get('token_mo') or user.get('token_mos') if user else None
+    if not token:
+        await message.answer(
+            "🛰️ **Токен не найден**\n"
+            "Для просмотра ЦДЗ подключите аккаунт:",
+            reply_markup=get_region_kb()
+        )
+        return
+    await message.answer("📅 **Выберите день:**", reply_markup=get_hw_kb())
+
+@dp.callback_query(F.data.startswith("hw_date_"))
+async def show_hw_date(callback: types.CallbackQuery):
+    date_str = callback.data.split("hw_date_")[1]
+    user = db.get_user(callback.from_user.id)
+    token = user.get('token_mo') or user.get('token_mos')
+    student_id = user.get('student_id')
+    
+    status_msg = await callback.message.answer(f"🔍 Ищу задания на {date_str}...")
+    hws = await parser.get_mosreg_homework(token, student_id, date_str=date_str)
+    
+    if not hws:
+        await status_msg.edit_text(f"📭 На {date_str} заданий не найдено.")
+    else:
+        await status_msg.delete()
+        for hw in hws:
+            if hw.get('link'):
+                text = f"📖 **{hw['subject']}**\n📅 {hw['date']}\n📝 {hw['description'] or ''}\n🔗 [Открыть]({hw['link']})"
+            else:
+                text = f"📖 **{hw['subject']}**\n📅 {hw['date']}\n📝 {hw['description'] or 'Без описания'}"
+            await callback.message.answer(text, parse_mode="Markdown")
+
+@dp.callback_query(F.data == "back_to_menu")
+async def back_to_menu(callback: types.CallbackQuery):
+    await callback.message.delete()
+
+# ─── ПРИЁМ ТОКЕНА ───
+
+@dp.message(F.text.regexp(r'^eyJ[a-zA-Z0-9._\-]+$'))
+async def process_token(message: types.Message):
+    token = message.text.strip()
+    status_msg = await message.answer("🔄 Проверяю токен...")
+    
+    # Токен уже готовый access_token — используем напрямую
+    logger.info(f"Received token, length={len(token)}")
+    
+    # Пробуем получить профиль Мосрег
+    profile = await parser.fetch_mosreg_profile(token)
+    if profile:
+        db.update_user(message.from_user.id, token_mo=token, **profile)
+        name = f"{profile.get('first_name', '')} {profile.get('last_name', '')}".strip()
+        sid = profile.get('student_id', '?')
+        await status_msg.edit_text(
+            f"✅ **Ура, {name}!**\n\n"
+            f"Аккаунт привязан (ID: {sid}).\n"
+            f"Теперь нажми «📚 Список ЦДЗ», чтобы увидеть задания!"
+        )
+        return
+    
+    # Пробуем МЭШ
+    profile = await parser.fetch_mesh_profile(token)
+    if profile:
+        db.update_user(message.from_user.id, token_mos=token, **profile)
+        name = f"{profile.get('first_name', '')} {profile.get('last_name', '')}".strip()
+        await status_msg.edit_text(f"✅ **Ура, {name}!** Ты в МЭШ.")
+        return
+    
+    # Ни один API не принял
+    await status_msg.edit_text(
+        "❌ **Токен не подходит.**\n\n"
+        "Возможные причины:\n"
+        "• Токен устарел или скопирован не полностью\n"
+        "• Вы не авторизовались в дневнике перед получением токена\n\n"
+        "Нажмите «❓ Как войти» и попробуйте снова."
     )
 
-    app.add_handler(conv_handler)
+# ─── ССЫЛКИ НА ТЕСТЫ ───
 
-    logger.info("Бот запущен")
-    app.run_polling()
+@dp.message(F.text.startswith("https://"))
+async def handle_link(message: types.Message):
+    url = message.text.strip()
+    status_msg = await message.answer("⌛ Начинаю решение...")
+    async def update_status(text):
+        try: await status_msg.edit_text(text)
+        except: pass
+    res = await parser.solve_test(message.from_user.id, url, update_status)
+    await message.answer(res)
 
+# ─── ЗАПУСК ───
 
-if __name__ == "__main__":
-    main()
+async def main():
+    API_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN") or '8684063011:AAG5xtd4MfZLIc3FvGbXCABLnh-hcpieR_U'
+    PROXY_URL = os.getenv("BROWSER_PROXY") or os.getenv("TELEGRAM_PROXY")
+    
+    async def try_start(token, proxy=None):
+        session = AiohttpSession(proxy=proxy) if proxy else None
+        bot = Bot(token=token, session=session)
+        try:
+            me = await bot.get_me()
+            logger.info(f"Bot @{me.username} is online!")
+            await dp.start_polling(bot)
+            return True
+        except Exception as e:
+            logger.error(f"Connection error: {e}")
+            if bot.session: await bot.session.close()
+            return False
+
+    if not await try_start(API_TOKEN, PROXY_URL):
+        await try_start(API_TOKEN, None)
+
+if __name__ == '__main__':
+    asyncio.run(main())
