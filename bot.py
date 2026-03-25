@@ -61,11 +61,10 @@ def get_main_menu_kb():
     builder.button(text="📚 Моё ДЗ")
     builder.button(text="⚡ Авто решение")
     builder.button(text="👤 Профиль")
-    builder.button(text="📊 Статистика")
-    builder.button(text="📡 О нас")
-    builder.button(text="💳 Поддержка")
     builder.button(text="⚙️ Настройки")
-    builder.adjust(2, 2, 2, 1)
+    builder.button(text="📡 О нас")
+    builder.button(text="💬 Поддержка")
+    builder.adjust(2)
     return builder.as_markup(resize_keyboard=True)
 
 def get_week_kb(prefix="week"):
@@ -104,10 +103,9 @@ def get_hw_action_kb(subject_name):
 
 def get_settings_kb():
     builder = InlineKeyboardBuilder()
-    builder.button(text="👤 Мой профиль", callback_data="set_profile")
-    builder.button(text="⚙️ Режим: Быстрый", callback_data="set_mode_fast")
-    builder.button(text="🧩 Очистить кеш", callback_data="set_clear_cache")
-    builder.button(text="🔙 Назад", callback_data="back_to_main")
+    builder.button(text="🔄 Обновить данные", callback_data="refresh_data")
+    builder.button(text="💳 Подписка", callback_data="subscription_info")
+    builder.button(text="🔙 Вернуться в главное меню", callback_data="back_to_main")
     builder.adjust(1)
     return builder.as_markup()
 
@@ -190,27 +188,28 @@ async def auto_solve_start(message: types.Message, state: FSMContext):
 @dp.message(F.text == "👤 Профиль")
 async def profile_main(message: types.Message, state: FSMContext):
     user = db.get_user(message.from_user.id)
+    stats = db.get_stats(message.from_user.id)
+    
+    status_icon = "✅" if user.get('token_mos') else "❌"
+    status_text = "Привязан" if user.get('token_mos') else "Не привязан"
+    
     profile_text = (
-        f"👤 **Ваш профиль**\n\n"
-        f"📛 Имя: {user.get('first_name') or 'Ученик'}\n"
+        f"👤 **Профиль пользователя**\n"
+        f"──────────────────\n"
+        f"📛 Имя: {user.get('first_name') or 'хлеб'}\n"
         f"🏫 Класс: {user.get('grade') or 'Не указан'}\n"
-        f"🔑 Статус: {'✅ Авторизован' if user.get('token_mos') else '❌ Нет токена'}"
+        f"🔑 Статус: {status_icon} {status_text}\n"
+        f"──────────────────\n"
+        f"📊 **Статистика:**\n"
+        f"✅ Решено ДЗ: {stats['solved']}\n"
+        f"⭐ Средний балл: {stats['avg']}\n"
     )
     await message.answer(profile_text, parse_mode="Markdown")
 
 @dp.message(F.text == "📊 Статистика")
-async def stats_main(message: types.Message, state: FSMContext):
-    user = db.get_user(message.from_user.id)
-    if not await check_token(message, user): return
-    
-    stats = db.get_stats(message.from_user.id)
-    stats_text = (
-        f"📊 **Ваша статистика**\n\n"
-        f"✅ Решено тестов: {stats['solved']}\n"
-        f"⭐ Средний балл: {stats['avg']}\n"
-        f"💎 Сэкономлено: {stats['saved']} токенов"
-    )
-    await message.answer(stats_text, parse_mode="Markdown")
+async def stats_redirect(message: types.Message, state: FSMContext):
+    # Если нажал старую кнопку (в кеше телеграма), шлем в профиль
+    await profile_main(message, state)
 
 @dp.message(F.text == "📡 О нас")
 async def about_main(message: types.Message, state: FSMContext):
@@ -222,13 +221,13 @@ async def about_main(message: types.Message, state: FSMContext):
         "👥 Разработчик: @developer"
     )
 
+@dp.message(F.text == "💬 Поддержка")
 @dp.message(F.text == "💳 Поддержка")
 async def support_main(message: types.Message, state: FSMContext):
     await message.answer(
-        "💳 **Поддержка проекта**\n\n"
-        "Если бот помог тебе, ты можешь поддержать его развитие!\n"
-        "Любая сумма поможет оплачивать прокси и API.\n\n"
-        "🔗 Ссылка: [Поддержать](https://t.me/your_payment_link)",
+        "💬 **Чат поддержки**\n\n"
+        "Если у тебя возникли вопросы или проблемы в работе бота, пиши нам в чат!\n\n"
+        "🔗 Ссылка: [Перейти в чат](https://t.me/your_support_chat)",
         parse_mode="Markdown"
     )
 
@@ -447,6 +446,49 @@ async def explain_token(call: types.CallbackQuery):
     builder = InlineKeyboardBuilder()
     builder.button(text="🔙 Вернуться в главное меню", callback_data="back_to_main")
     await call.message.edit_text(explain_text, parse_mode="Markdown", reply_markup=builder.as_markup())
+
+# ─── НАСТРОЙКИ: ОБНОВИТЬ ДАННЫЕ ───
+
+@dp.callback_query(F.data == "refresh_data")
+async def refresh_user_data(call: types.CallbackQuery, state: FSMContext):
+    user = db.get_user(call.from_user.id)
+    if not user.get('token_mos'):
+        await call.answer("⚠️ Сначала привяжите токен!", show_alert=True)
+        return
+    
+    await call.message.edit_text("🔄 **Обновляю данные из системы...**", parse_mode="Markdown")
+    
+    try:
+        profile = await parser.get_mosreg_profile(user['token_mos'])
+        if profile:
+            db.update_user(call.from_user.id, grade=profile['grade'], student_id=profile['student_id'])
+            await call.message.edit_text("✅ **Данные успешно обновлены!**", reply_markup=get_settings_kb(), parse_mode="Markdown")
+        else:
+            await call.message.edit_text("❌ **Ошибка обновления.** Попробуйте позже.", reply_markup=get_settings_kb(), parse_mode="Markdown")
+    except Exception as e:
+        logger.error(f"Error refreshing data: {e}")
+        await call.message.edit_text("❌ **Техническая ошибка.** Проверьте токен.", reply_markup=get_settings_kb(), parse_mode="Markdown")
+
+# ─── НАСТРОЙКИ: ПОДПИСКА ───
+
+@dp.callback_query(F.data == "subscription_info")
+async def subscription_info(call: types.CallbackQuery):
+    sub_text = (
+        "💳 **Информация о подписке**\n\n"
+        "Подписка открывает доступ к:\n"
+        "🚀 Мгновенному решению без очередей\n"
+        "📂 Архиву всех решенных работ\n"
+        "👤 Личному менеджеру поддержки\n\n"
+        "💎 **Стоимость: 299₽ / месяц**\n\n"
+        "Чтобы оформить, пишите администратору: @admin_username"
+    )
+    builder = InlineKeyboardBuilder()
+    builder.button(text="🔙 Назад к настройкам", callback_data="back_to_settings")
+    await call.message.edit_text(sub_text, parse_mode="Markdown", reply_markup=builder.as_markup())
+
+@dp.callback_query(F.data == "back_to_settings")
+async def back_to_settings(call: types.CallbackQuery, state: FSMContext):
+    await call.message.edit_text("⚙️ **Настройки бота:**", reply_markup=get_settings_kb(), parse_mode="Markdown")
 
 # ─── ЗАПУСК ───
 
