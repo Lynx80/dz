@@ -327,9 +327,11 @@ async def _cleanup_browser(context: ContextTypes.DEFAULT_TYPE):
 def main():
     token = os.getenv("TELEGRAM_BOT_TOKEN")
     if not token:
-        raise RuntimeError("TELEGRAM_BOT_TOKEN не задан в .env")
+        print("Error: TELEGRAM_BOT_TOKEN not found in .env file")
+        return
 
-    app = Application.builder().token(token).build()
+    # Увеличиваем таймауты для стабильности при плохом соединении
+    app = Application.builder().token(token).connect_timeout(30).read_timeout(30).build()
 
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler("start", start)],
