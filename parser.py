@@ -127,6 +127,37 @@ class ParserService:
         
         return None
 
+    async def get_mosreg_schedule(self, access_token, student_id, date_str=None):
+        """
+        Получает расписание уроков (событий) для отображения пользователю.
+        """
+        if not student_id: return []
+        if not date_str: date_str = datetime.now().strftime('%Y-%m-%d')
+        
+        url = (f"https://authedu.mosreg.ru/api/eventcalendar/v1/api/events"
+               f"?person_ids={student_id}&begin_date={date_str}&end_date={date_str}&expand=homework")
+        headers = self.base_headers.copy()
+        headers['Authorization'] = f'Bearer {access_token}'
+        
+        async with aiohttp.ClientSession() as session:
+            try:
+                async with session.get(url, headers=headers, timeout=15) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        events = data.get('response', [])
+                        schedule = []
+                        for ev in events:
+                            schedule.append({
+                                "subject": ev.get('subject_name') or ev.get('title', 'Урок'),
+                                "time": f"{ev.get('start_at', '')[11:16]} - {ev.get('finish_at', '')[11:16]}",
+                                "room": ev.get('room_number', ''),
+                                "has_hw": bool(ev.get('homework'))
+                            })
+                        return schedule
+            except Exception as e:
+                logger.error(f"Schedule error: {e}")
+        return []
+
     async def get_mosreg_homework(self, access_token, student_id, date_str=None):
         """
         Получает ЦДЗ через eventcalendar API.
@@ -134,7 +165,7 @@ class ParserService:
         if not student_id: return []
         if not date_str: date_str = datetime.now().strftime('%Y-%m-%d')
         begin_date = date_str
-        end_date = (datetime.strptime(date_str, '%Y-%m-%d') + timedelta(days=1)).strftime('%Y-%m-%d')
+        end_date = date_str # Для одного дня берем ту же дату
         
         url = (f"https://authedu.mosreg.ru/api/eventcalendar/v1/api/events"
                f"?person_ids={student_id}&begin_date={begin_date}&end_date={end_date}&expand=homework")
@@ -156,14 +187,13 @@ class ParserService:
                             for hw in hw_list:
                                 desc = hw.get('description', '') or hw.get('text', '')
                                 link = None
-                                # Ищем ссылки в материалах
                                 materials = hw.get('materials', [])
                                 for m in materials:
                                     for item in m.get('items', []):
                                         if item.get('link'): link = item.get('link'); break
                                     if link: break
                                     
-                                if not link: # Ищем в тексте
+                                if not link:
                                     urls = re.findall(r'https?://[^\s<>"]+', desc)
                                     if urls: link = urls[0]
                                     
@@ -175,7 +205,7 @@ class ParserService:
                         return homeworks
             except Exception as e:
                 logger.error(f"Homework error: {e}")
-        return await self._get_homework_fallback(access_token, student_id, date_str)
+        return []
 
     async def _get_homework_fallback(self, access_token, student_id, date_str):
         """Fallback: homeworks/short через authedu.mosreg.ru"""
@@ -273,9 +303,17 @@ class ParserService:
                     if status_callback: await status_callback(f"🤔 Решаю вопрос {q_num}...")
                     options_elements = await page.query_selector_all("label.el-radio, label.el-checkbox, .v-answer-item")
                     options_texts = [await el.inner_text() for el in options_elements]
-                    if q_num > 1: await asyncio.sleep(40)
-                    ai_res = await self.ai.get_answer(question_text, options_texts)
-                    ans_val = ai_res.get("answer")
+                    # Сначала проверяем кэш базы данных
+                    ans_val = self.db.get_answer_cache(question_text, options_texts)
+                    if ans_val:
+                        if status_callback: await status_callback(f"♻️ Использую кэш для вопроса {q_num}...")
+                    else:
+                        if q_num > 1: await asyncio.sleep(40) # Задержка для Videouroki
+                        ai_res = await self.ai.get_answer(question_text, options_texts)
+                        ans_val = ai_res.get("answer")
+                        # Сохраняем в кэш
+                        self.db.set_answer_cache(question_text, options_texts, str(ans_val))
+                    
                     idx = self._match_index(ans_val, options_texts)
                     if idx != -1: await options_elements[idx].click()
                     next_btn = await page.query_selector("button:has-text('Далее'), .btn-next")
@@ -365,9 +403,14 @@ class ParserService:
                         # Тут можно добавить логику для ввода текста
                         break
 
-                    # Спрашиваем ИИ
-                    ai_res = await self.ai.get_answer(question_text, options_texts)
-                    ans_val = ai_res.get("answer")
+                    # Спрашиваем ИИ (сначала кэш)
+                    ans_val = self.db.get_answer_cache(question_text, options_texts)
+                    if not ans_val:
+                        ai_res = await self.ai.get_answer(question_text, options_texts)
+                        ans_val = ai_res.get("answer")
+                        self.db.set_answer_cache(question_text, options_texts, str(ans_val))
+                    else:
+                        if status_callback: await status_callback(f"♻️ Использую кэш для вопроса {q_num}...")
                     
                     idx = self._match_index(ans_val, options_texts)
                     if idx != -1:
