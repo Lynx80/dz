@@ -16,6 +16,8 @@ from aiogram.types import ReplyKeyboardMarkup, InlineKeyboardMarkup
 from database import Database
 from parser import ParserService
 
+from aiogram.client.session.aiohttp import AiohttpSession
+
 load_dotenv()
 
 # Настройка логирования
@@ -23,8 +25,16 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Инициализация бота и БД
-API_TOKEN = os.getenv("BOT_TOKEN", "8684063011:AAG5xtd4MfZLIc3FvGbXCABLnh-hcpieR_U")
-bot = Bot(token=API_TOKEN)
+API_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "8684063011:AAG5xtd4MfZLIc3FvGbXCABLnh-hcpieR_U")
+PROXY_URL = os.getenv("TELEGRAM_PROXY")
+
+if PROXY_URL:
+    logger.info(f"Using proxy: {PROXY_URL}")
+    session = AiohttpSession(proxy=PROXY_URL)
+    bot = Bot(token=API_TOKEN, session=session)
+else:
+    bot = Bot(token=API_TOKEN)
+
 dp = Dispatcher(storage=MemoryStorage())
 db = Database()
 parser = ParserService()
@@ -38,16 +48,24 @@ class BotStates(StatesGroup):
     AUTO_SOLVE_WEEK = State()
     AUTO_SOLVE_DAY = State()
     SETTINGS = State()
+    PROFILE = State()
+    STATS = State()
+    ABOUT = State()
+    SUPPORT = State()
     WAITING_FOR_TOKEN = State()
 
 # ─── КЛАВИАТУРЫ ───
 
 def get_main_menu_kb():
     builder = ReplyKeyboardBuilder()
-    builder.button(text="📚 Мои ЦДЗ")
+    builder.button(text="📚 Моё ДЗ")
     builder.button(text="⚡ Авто решение")
+    builder.button(text="👤 Профиль")
+    builder.button(text="📊 Статистика")
+    builder.button(text="📡 О нас")
+    builder.button(text="💳 Поддержка")
     builder.button(text="⚙️ Настройки")
-    builder.adjust(2, 1)
+    builder.adjust(2, 2, 2, 1)
     return builder.as_markup(resize_keyboard=True)
 
 def get_week_kb(prefix="week"):
@@ -118,7 +136,7 @@ async def cmd_restart(message: types.Message, state: FSMContext):
 
 # ─── ГЛАВНОЕ МЕНЮ ───
 
-@dp.message(F.text == "📚 Мои ЦДЗ")
+@dp.message(F.text == "📚 Моё ДЗ")
 async def my_hw_start(message: types.Message, state: FSMContext):
     await message.answer("📅 **Выберите неделю:**", reply_markup=get_week_kb(prefix="manual"))
     await state.set_state(BotStates.WEEK_SELECTION)
@@ -128,9 +146,51 @@ async def auto_solve_start(message: types.Message, state: FSMContext):
     await message.answer("🚀 **Авто-режим: Выберите неделю:**", reply_markup=get_week_kb(prefix="auto"))
     await state.set_state(BotStates.AUTO_SOLVE_WEEK)
 
+@dp.message(F.text == "👤 Профиль")
+async def profile_main(message: types.Message, state: FSMContext):
+    user = db.get_user(message.from_user.id)
+    profile_text = (
+        f"👤 **Ваш профиль**\n\n"
+        f"📛 Имя: {user.get('first_name') or 'Ученик'}\n"
+        f"🏫 Класс: {user.get('grade') or 'Не указан'}\n"
+        f"🔑 Статус: {'✅ Авторизован' if user.get('token_mos') else '❌ Нет токена'}"
+    )
+    await message.answer(profile_text, parse_mode="Markdown")
+
+@dp.message(F.text == "📊 Статистика")
+async def stats_main(message: types.Message, state: FSMContext):
+    stats = db.get_stats(message.from_user.id)
+    stats_text = (
+        f"📊 **Ваша статистика**\n\n"
+        f"✅ Решено тестов: {stats['solved']}\n"
+        f"⭐ Средний балл: {stats['avg']}\n"
+        f"💎 Сэкономлено: {stats['saved']} токенов"
+    )
+    await message.answer(stats_text, parse_mode="Markdown")
+
+@dp.message(F.text == "📡 О нас")
+async def about_main(message: types.Message, state: FSMContext):
+    await message.answer(
+        "📡 **О проекте**\n\n"
+        "Этот бот создан для помощи ученикам в автоматизации ЦДЗ.\n"
+        "Мы используем ИИ Gemini и Playwright для решения тестов.\n\n"
+        "📢 Канал: @your_channel\n"
+        "👥 Разработчик: @developer"
+    )
+
+@dp.message(F.text == "💳 Поддержка")
+async def support_main(message: types.Message, state: FSMContext):
+    await message.answer(
+        "💳 **Поддержка проекта**\n\n"
+        "Если бот помог тебе, ты можешь поддержать его развитие!\n"
+        "Любая сумма поможет оплачивать прокси и API.\n\n"
+        "🔗 Ссылка: [Поддержать](https://t.me/your_payment_link)",
+        parse_mode="Markdown"
+    )
+
 @dp.message(F.text == "⚙️ Настройки")
 async def settings_start(message: types.Message, state: FSMContext):
-    await message.answer("⚙️ **Настройки и Профиль:**", reply_markup=get_settings_kb())
+    await message.answer("⚙️ **Настройки бота:**", reply_markup=get_settings_kb())
     await state.set_state(BotStates.SETTINGS)
 
 # ─── CALLBACK ХЕНДЛЕРЫ ───
@@ -227,9 +287,23 @@ async def handle_solve(call: types.CallbackQuery, state: FSMContext):
         await call.answer("❌ Тесты не найдены!")
         return
 
-    # Если "solve_all_now"
-    tasks_to_solve = links if "all_now" in call.data else [links[0]] # В демо просто первый
+    # Находим индекс задачи если это не "solve_all_now"
+    tasks_to_solve = []
+    if "all_now" in call.data:
+        tasks_to_solve = links
+    elif "solve_fast_" in call.data:
+        idx = int(call.data.replace("solve_fast_", ""))
+        if idx < len(links): tasks_to_solve = [links[idx]]
+    elif "solve_precise_" in call.data:
+        # Для ручного режима из 'Моё ДЗ'
+        subject = call.data.replace("solve_precise_", "")
+        if subject == "all": tasks_to_solve = links
+        else: tasks_to_solve = [l for l in links if l['subject'] == subject]
     
+    if not tasks_to_solve:
+        await call.answer("❌ Задание не найдено!")
+        return
+
     await call.message.edit_text("⚙️ **Инициализация решателя...**", parse_mode="Markdown")
     
     for task in tasks_to_solve:
