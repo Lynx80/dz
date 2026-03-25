@@ -541,10 +541,10 @@ async def speed_menu(call: types.CallbackQuery):
 
 @dp.callback_query(F.data.startswith("save_speed_"))
 async def save_speed(call: types.CallbackQuery):
+    await call.answer()
     speed = int(call.data.replace("save_speed_", ""))
     db.update_user(call.from_user.id, solve_delay=speed)
     user = db.get_user(call.from_user.id)
-    await call.answer(f"✅ Скорость установлена: {speed} мин")
     await call.message.edit_text(
         "⚙️ **Настройки бота:**",
         reply_markup=get_settings_kb(user.get('solve_delay'), user.get('accuracy_mode')),
@@ -563,10 +563,10 @@ async def accuracy_menu(call: types.CallbackQuery):
 
 @dp.callback_query(F.data.startswith("save_acc_"))
 async def save_accuracy(call: types.CallbackQuery):
+    await call.answer()
     mode = call.data.replace("save_acc_", "")
     db.update_user(call.from_user.id, accuracy_mode=mode)
     user = db.get_user(call.from_user.id)
-    await call.answer("✅ Режим точности обновлен")
     await call.message.edit_text(
         "⚙️ **Настройки бота:**",
         reply_markup=get_settings_kb(user.get('solve_delay'), user.get('accuracy_mode')),
