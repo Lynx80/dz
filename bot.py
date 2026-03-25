@@ -113,23 +113,36 @@ def get_settings_kb():
 
 # ─── ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ───
 
+def get_token_help_kb():
+    builder = InlineKeyboardBuilder()
+    builder.button(text="Что такое токен ❓", callback_data="what_is_token")
+    builder.button(text="🔙 Вернуться в главное меню", callback_data="back_to_main")
+    builder.adjust(1)
+    return builder.as_markup()
+
 async def check_token(message: types.Message, user):
     if not user or not user.get('token_mos'):
         help_text = (
-            "⚠️ **Токен не найден!**\n\n"
-            "Чтобы пользоваться ботом, нужно привязать ваш аккаунт Школьного Портала.\n\n"
-            "**Как получить токен:**\n"
-            "1️⃣ Зайдите в [Школьный Портал](https://myschool.mosreg.ru) с компьютера.\n"
-            "2️⃣ Нажмите **F12** (Инструменты разработчика) -> вкладка **Network** (Сеть).\n"
-            "3️⃣ Обновите страницу и найдите любой запрос (например, `profile_info`).\n"
-            "4️⃣ В заголовках (Headers) найдите `auth-token` или `Authorization`.\n"
-            "5️⃣ Скопируйте длинный код (начинается на `eyJ...`) и **пришлите его сюда**.\n\n"
-            "👉 Или просто нажмите на кнопку «⚡ Авто решение», чтобы я помог вам."
+            "⚠️ **Токен не загружен!**\n\n"
+            "Токен — это твой цифровой ключ! Он дает боту доступ к тестам! 🔑\n\n"
+            "**Как получить токен:**\n\n"
+            "1️⃣ **Перейди по ссылке:**\n"
+            "- [Москва](https://school.mos.ru/?backUrl=https%3A%2F%2Fschool.mos.ru%2Fv2%2Ftoken%2Frefresh)\n"
+            "- **Для Московской области:**\n"
+            "   • [Войти в аккаунт](https://authedu.mosreg.ru/)\n"
+            "   • [Получить токен](https://authedu.mosreg.ru/v2/token/refresh)\n\n"
+            "2️⃣ **Введи логин и пароль** от своего аккаунта.\n"
+            "(Не волнуйся, мы их не видим — это только для системы! 🔒)\n\n"
+            "3️⃣ **Скопируй токен** с открывшейся страницы.\n"
+            "(Он начинается с `eyJhbG...` — как секретный код! 🕵️‍♂️)\n\n"
+            "4️⃣ **Отправь токен сюда**, и наш бот сразу приступит к работе! 🚀\n\n"
+            "P.S. Без токена — никаких тестов. Так что действуй! 🔥\n"
+            "*Для МО обязательно сначала войти в аккаунт, а потом получить токен!*"
         )
         if isinstance(message, types.CallbackQuery):
-            await message.message.answer(help_text, parse_mode="Markdown", disable_web_page_preview=True)
+            await message.message.answer(help_text, parse_mode="Markdown", reply_markup=get_token_help_kb(), disable_web_page_preview=True)
         else:
-            await message.answer(help_text, parse_mode="Markdown", disable_web_page_preview=True)
+            await message.answer(help_text, parse_mode="Markdown", reply_markup=get_token_help_kb(), disable_web_page_preview=True)
         return False
     return True
 
@@ -229,7 +242,11 @@ async def settings_start(message: types.Message, state: FSMContext):
 @dp.callback_query(F.data == "back_to_main")
 async def back_to_main(call: types.CallbackQuery, state: FSMContext):
     await state.set_state(BotStates.MAIN_MENU)
-    await call.message.edit_text("🏠 **Главное меню:**", reply_markup=get_main_menu_kb(), parse_mode="Markdown")
+    # Пытаемся отредактировать сообщение или отправить новое если это из 'check_token'
+    try:
+        await call.message.edit_text("🏠 **Главное меню:**", reply_markup=get_main_menu_kb(), parse_mode="Markdown")
+    except:
+        await call.message.answer("🏠 **Главное меню:**", reply_markup=get_main_menu_kb(), parse_mode="Markdown")
 
 # Выбор недели (Ручной / Авто)
 @dp.callback_query(StateFilter(BotStates.WEEK_SELECTION, BotStates.AUTO_SOLVE_WEEK), F.data.contains("_prev") | F.data.contains("_curr"))
@@ -411,6 +428,25 @@ async def process_token(message: types.Message, state: FSMContext):
         await state.set_state(BotStates.MAIN_MENU)
     else:
         await message.answer("❌ **Ошибка!** Токен не подходит или истек. Перезайди в Школьный Портал и скопируй новый.")
+
+# ─── ЧТО ТАКОЕ ТОКЕН ───
+
+@dp.callback_query(F.data == "what_is_token")
+async def explain_token(call: types.CallbackQuery):
+    explain_text = (
+        "🔑 **Токен — это твой цифровой ключ!**\n\n"
+        "Он нужен, чтобы бот смог безопасно подключиться к твоему учебному аккаунту "
+        "(как логин/пароль, но без риска).\n\n"
+        "✨ **Как работает?**\n"
+        "1️⃣ Токен даёт доступ **только к тестам** — не трогает другие данные.\n"
+        "2️⃣ Действует **ограниченное время**, не нужно лишний раз менять пароль.\n"
+        "3️⃣ Гарантирует безопасность твоих личных данных.\n\n"
+        "⚠️ **Без него бот не решит ни одного задания!**\n"
+        "Это единственный способ авторизации без передачи вашего пароля сторонним лицам."
+    )
+    builder = InlineKeyboardBuilder()
+    builder.button(text="🔙 Вернуться в главное меню", callback_data="back_to_main")
+    await call.message.edit_text(explain_text, parse_mode="Markdown", reply_markup=builder.as_markup())
 
 # ─── ЗАПУСК ───
 
