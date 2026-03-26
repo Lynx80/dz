@@ -513,6 +513,7 @@ async def refresh_user_data(call: types.CallbackQuery, state: FSMContext):
 
 @dp.callback_query(F.data == "subscription_info")
 async def subscription_info(call: types.CallbackQuery):
+    logger.info(f"Button clicked: {call.data}")
     await call.answer()
     sub_text = (
         "💳 **Информация о подписке**\n\n"
@@ -529,6 +530,7 @@ async def subscription_info(call: types.CallbackQuery):
 
 @dp.callback_query(F.data == "back_to_settings")
 async def back_to_settings(call: types.CallbackQuery, state: FSMContext):
+    logger.info(f"Button clicked: {call.data}")
     await call.answer()
     user = db.get_user(call.from_user.id)
     await call.message.edit_text(
@@ -541,6 +543,7 @@ async def back_to_settings(call: types.CallbackQuery, state: FSMContext):
 
 @dp.callback_query(F.data == "set_speed_menu")
 async def speed_menu(call: types.CallbackQuery):
+    logger.info(f"Button clicked: {call.data}")
     await call.answer()
     user = db.get_user(call.from_user.id)
     await call.message.edit_text(
@@ -554,6 +557,7 @@ async def speed_menu(call: types.CallbackQuery):
 
 @dp.callback_query(F.data.startswith("save_speed_"))
 async def save_speed(call: types.CallbackQuery):
+    logger.info(f"Button clicked: {call.data}")
     await call.answer()
     speed = int(call.data.replace("save_speed_", ""))
     db.update_user(call.from_user.id, solve_delay=speed)
@@ -564,6 +568,7 @@ async def save_speed(call: types.CallbackQuery):
 
 @dp.callback_query(F.data == "set_accuracy_menu")
 async def accuracy_menu(call: types.CallbackQuery):
+    logger.info(f"Button clicked: {call.data}")
     await call.answer()
     user = db.get_user(call.from_user.id)
     try:
@@ -580,6 +585,7 @@ async def accuracy_menu(call: types.CallbackQuery):
 
 @dp.callback_query(F.data.startswith("save_acc_"))
 async def save_accuracy(call: types.CallbackQuery):
+    logger.info(f"Button clicked: {call.data}")
     await call.answer()
     mode = call.data.replace("save_acc_", "")
     db.update_user(call.from_user.id, accuracy_mode=mode)
