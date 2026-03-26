@@ -144,18 +144,75 @@ class ParserService:
                 async with session.get(url, headers=headers, timeout=15) as resp:
                     if resp.status == 200:
                         data = await resp.json()
+                        logger.info(f"Schedule API raw response (partial): {str(data)[:500]}")
                         events = data.get('response', [])
                         schedule = []
+                        
+                        # Если events пустой, возможно используется другой ключ или структура
+                        if not events and 'data' in data:
+                            events = data['data']
+                        
                         for ev in events:
+                            # Проверяем тип события (обычно 1 - урок)
+                            # types: 1 - lesson, 2 - event, 3 - etc.
+                            # Но нам нужны любые учебные события
+                            subject = ev.get('subject_name') or ev.get('title') or ev.get('subject', {}).get('name', 'Урок')
+                            
+                            start = ev.get('start_at') or ev.get('begin_time') or ''
+                            end = ev.get('finish_at') or ev.get('end_time') or ''
+                            
+                            time_str = ""
+                            if start and end:
+                                time_str = f"{start[11:16]} - {end[11:16]}"
+                            else:
+                                time_str = "Время не указано"
+                                
                             schedule.append({
-                                "subject": ev.get('subject_name') or ev.get('title', 'Урок'),
-                                "time": f"{ev.get('start_at', '')[11:16]} - {ev.get('finish_at', '')[11:16]}",
-                                "room": ev.get('room_number', ''),
-                                "has_hw": bool(ev.get('homework'))
+                                "subject": subject,
+                                "time": time_str,
+                                "room": ev.get('room_number') or ev.get('room') or '',
+                                "has_hw": bool(ev.get('homework')) or bool(ev.get('has_homework'))
+                            })
+                        
+                        # Сортируем по времени
+                        schedule.sort(key=lambda x: x['time'])
+                        
+                        # Если все еще пустой, пробуем v3/schedule
+                        if not schedule:
+                            schedule = await self.get_mosreg_schedule_v3(access_token, student_id, date_str)
+                            
+                        return schedule
+                    else:
+                        logger.error(f"Schedule API error: {resp.status} - {await resp.text()}")
+            except Exception as e:
+                logger.error(f"Schedule error: {e}")
+        return await self.get_mosreg_schedule_v3(access_token, student_id, date_str)
+
+    async def get_mosreg_schedule_v3(self, access_token, student_id, date_str):
+        """Резервный метод получения расписания через v3 API"""
+        url = f"https://authedu.mosreg.ru/api/family/v3/schedule?student_id={student_id}&date={date_str}"
+        headers = self.base_headers.copy()
+        headers['Authorization'] = f'Bearer {access_token}'
+        
+        async with aiohttp.ClientSession() as session:
+            try:
+                async with session.get(url, headers=headers, timeout=10) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        logger.info(f"Schedule V3 raw response (partial): {str(data)[:500]}")
+                        items = data.get('data', {}).get('items', [])
+                        schedule = []
+                        for item in items:
+                            # В v3 структе может быть по-другому
+                            schedule.append({
+                                "subject": item.get('subject_name') or item.get('name', 'Урок'),
+                                "time": f"{item.get('start_time', '')} - {item.get('end_time', '')}",
+                                "room": item.get('room_name') or '',
+                                "has_hw": bool(item.get('homework'))
                             })
                         return schedule
             except Exception as e:
-                logger.error(f"Schedule error: {e}")
+                logger.error(f"Schedule V3 error: {e}")
         return []
 
     async def get_mosreg_homework(self, access_token, student_id, date_str=None):
