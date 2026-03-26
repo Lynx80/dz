@@ -99,6 +99,8 @@ class ParserService:
         headers['Authorization'] = f'Bearer {access_token}'
         headers['auth-token'] = access_token
         headers['X-Mes-Subsystem'] = 'family'
+        headers['Referer'] = 'https://myschool.mosreg.ru/'
+        headers['Origin'] = 'https://myschool.mosreg.ru'
         
         async with aiohttp.ClientSession() as session:
             try:
@@ -119,11 +121,13 @@ class ParserService:
         return None
 
     def _parse_profile(self, child_data):
+        # Приоритизируем person_id для eventcalendar/homework API
+        sid = child_data.get('person_id') or child_data.get('student_id') or child_data.get('id', '')
         return {
             "first_name": child_data.get('first_name') or child_data.get('firstname', 'Ученик'),
             "last_name": child_data.get('last_name') or child_data.get('lastname', ''),
             "grade": str(child_data.get('class_name') or ''),
-            "student_id": str(child_data.get('id', ''))
+            "student_id": str(sid)
         }
 
     async def get_mosreg_schedule(self, access_token, student_id, date_str=None, retry_auth=True):
@@ -140,6 +144,8 @@ class ParserService:
         headers['Authorization'] = f'Bearer {access_token}'
         headers['auth-token'] = access_token
         headers['X-Mes-Subsystem'] = 'family'
+        headers['Referer'] = 'https://myschool.mosreg.ru/'
+        headers['Origin'] = 'https://myschool.mosreg.ru'
         
         async with aiohttp.ClientSession() as session:
             try:
