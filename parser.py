@@ -86,14 +86,8 @@ class ParserService:
     async def fetch_mosreg_profile(self, access_token):
         """
         Получает профиль через API.
-        1. Активация сессии (handshake)
-        2. Запрос полных данных (имя, класс) через authedu.mosreg.ru/api/family/mobile/v1/profile
+        Оптимизировано: пробуем сразу запросить профиль, если 403 - делаем активацию.
         """
-        # Шаг 1: Активация сессии (обязательно для 200 OK на других эндпоинтах)
-        activation = await self._activate_session(access_token)
-        
-        # Шаг 2: Получение полных данных
-        # Эндпоинты на authedu.mosreg.ru обычно более стабильны для мобильных токенов
         profile_url = "https://authedu.mosreg.ru/api/family/mobile/v1/profile"
         headers = self.base_headers.copy()
         headers['Authorization'] = f'Bearer {access_token}'
@@ -101,20 +95,36 @@ class ParserService:
         
         async with aiohttp.ClientSession() as session:
             try:
-                async with session.get(profile_url, headers=headers, timeout=15) as resp:
-                    logger.info(f"Full profile status={resp.status}")
+                # 1. Пробуем сразу получить профиль
+                async with session.get(profile_url, headers=headers, timeout=10) as resp:
                     if resp.status == 200:
                         data = await resp.json()
-                        logger.info(f"Full profile data received")
                         children = data.get('children', [])
                         if children:
-                            child = children[0]
-                            return {
-                                "first_name": child.get('first_name') or child.get('firstname', 'Ученик'),
-                                "last_name": child.get('last_name') or child.get('lastname', ''),
-                                "grade": str(child.get('class_name') or ''),
-                                "student_id": str(child.get('id', ''))
-                            }
+                            return self._parse_profile(children[0])
+                    
+                    # 2. Если не 200 (например 403), пробуем активацию
+                    if resp.status in [401, 403]:
+                        activation = await self._activate_session(access_token)
+                        if activation:
+                            # Пробуем еще раз после активации
+                            async with session.get(profile_url, headers=headers, timeout=10) as resp2:
+                                if resp2.status == 200:
+                                    data = await resp2.json()
+                                    children = data.get('children', [])
+                                    if children:
+                                        return self._parse_profile(children[0])
+            except Exception as e:
+                logger.error(f"Fetch profile error: {e}")
+        return None
+
+    def _parse_profile(self, child_data):
+        return {
+            "first_name": child_data.get('first_name') or child_data.get('firstname', 'Ученик'),
+            "last_name": child_data.get('last_name') or child_data.get('lastname', ''),
+            "grade": str(child_data.get('class_name') or ''),
+            "student_id": str(child_data.get('id', ''))
+        }
                     elif resp.status == 401:
                         new_token = await self.refresh_token(access_token)
                         if new_token: return await self.fetch_mosreg_profile(new_token)
