@@ -488,12 +488,15 @@ async def explain_token(call: types.CallbackQuery):
 
 @dp.callback_query(F.data == "refresh_data")
 async def refresh_user_data(call: types.CallbackQuery, state: FSMContext):
+    await call.answer("⏳ Обновляю...")
     user = db.get_user(call.from_user.id)
     if not user.get('token_mos'):
         await call.answer("⚠️ Сначала привяжите токен!", show_alert=True)
         return
     
-    await call.message.edit_text("🔄 **Обновляю данные из системы...**", parse_mode="Markdown")
+    try:
+        await call.message.edit_text("🔄 **Обновляю данные из системы...**", parse_mode="Markdown")
+    except TelegramBadRequest: pass
     
     try:
         profile = await parser.get_mosreg_profile(user['token_mos'])
