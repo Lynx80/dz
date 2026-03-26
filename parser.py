@@ -102,10 +102,14 @@ class ParserService:
                 payload = parts[1]
                 payload += '=' * (-len(payload) % 4)
                 decoded = json.loads(base64.b64decode(payload).decode('utf-8'))
-                if 'name' in decoded:
-                    user_info["first_name"] = decoded['name'].split()[0]
-                    user_info["student_id"] = str(decoded.get('sub', ''))
+                
+                # Ищем имя в разных возможных полях JWT
+                raw_name = decoded.get('name') or decoded.get('given_name') or decoded.get('fname') or decoded.get('first_name')
+                if raw_name:
+                    user_info["first_name"] = raw_name.split()[0]
                     logger.info(f"Extracted name from JWT: {user_info['first_name']}")
+                
+                user_info["student_id"] = str(decoded.get('sub', '') or decoded.get('person_id', ''))
         except Exception as e:
             logger.warning(f"JWT decode error: {e}")
 
@@ -174,8 +178,8 @@ class ParserService:
         # Приоритизируем person_id для eventcalendar/homework API
         sid = child_data.get('person_id') or child_data.get('student_id') or child_data.get('id', '')
         return {
-            "first_name": child_data.get('first_name') or child_data.get('firstname', 'Ученик'),
-            "last_name": child_data.get('last_name') or child_data.get('lastname', ''),
+            "first_name": child_data.get('first_name') or child_data.get('firstname') or '',
+            "last_name": child_data.get('last_name') or child_data.get('lastname') or '',
             "grade": str(child_data.get('class_name') or ''),
             "student_id": str(sid)
         }
