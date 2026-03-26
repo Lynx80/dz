@@ -134,6 +134,7 @@ class ParserService:
         headers = self.base_headers.copy()
         headers['Authorization'] = f'Bearer {access_token}'
         headers['auth-token'] = access_token
+        headers['X-Mes-Subsystem'] = 'family'
         
         async with aiohttp.ClientSession() as session:
             try:
@@ -157,11 +158,7 @@ class ParserService:
                             start = ev.get('start_at') or ev.get('begin_time') or ''
                             end = ev.get('finish_at') or ev.get('end_time') or ''
                             
-                            time_str = ""
-                            if start and end:
-                                time_str = f"{start[11:16]} - {end[11:16]}"
-                            else:
-                                time_str = "Время не указано"
+                            time_str = f"{start[11:16]} - {end[11:16]}" if (start and end) else "Время не указано"
                                 
                             schedule.append({
                                 "subject": subject,
@@ -178,14 +175,15 @@ class ParserService:
                             schedule = await self.get_mosreg_schedule_v3(access_token, student_id, date_str)
                             
                         return schedule
+                    
                     elif resp.status == 401:
+                        error_body = await resp.text()
+                        logger.warning(f"401 in schedule: {error_body}")
                         if retry_auth:
-                            logger.info("401 detected in schedule, trying handshake retry...")
+                            logger.info("Retrying handshake...")
                             await self._activate_session(access_token)
                             return await self.get_mosreg_schedule(access_token, student_id, date_str, retry_auth=False)
                         raise MosregAuthError("Токен истек")
-                    else:
-                        logger.error(f"Schedule API error: {resp.status} - {await resp.text()}")
             except MosregAuthError:
                 raise
             except Exception as e:
@@ -198,6 +196,7 @@ class ParserService:
         headers = self.base_headers.copy()
         headers['Authorization'] = f'Bearer {access_token}'
         headers['auth-token'] = access_token
+        headers['X-Mes-Subsystem'] = 'family'
         
         async with aiohttp.ClientSession() as session:
             try:
@@ -235,6 +234,7 @@ class ParserService:
         headers = self.base_headers.copy()
         headers['Authorization'] = f'Bearer {access_token}'
         headers['auth-token'] = access_token
+        headers['X-Mes-Subsystem'] = 'family'
         
         async with aiohttp.ClientSession() as session:
             try:
