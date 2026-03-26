@@ -218,17 +218,34 @@ async def profile_main(message: types.Message, state: FSMContext):
 @dp.message(F.text == "⚙️ НАСТРОЙКИ")
 async def settings_start(message: types.Message, state: FSMContext):
     user = db.get_user(message.from_user.id)
-    await message.answer("⚙️ НАСТРОЙКИ БОТА:\n\nЗдесь можно настроить скорость и точность.", 
-                         reply_markup=get_settings_kb(user.get('solve_delay', 15), user.get('accuracy_mode', 'excellent')))
+    await message.answer(
+        "⚙️ НАСТРОЙКИ БОТА:\n\n"
+        "Здесь вы можете настроить параметры автоматизации под свои нужды.\n\n"
+        "⏱ **Время решения**: Определяет паузу между выполнением тестов для имитации «человеческого» поведения.\n"
+        "🎯 **Точность**: Позволяет выбрать желаемый процент правильных ответов (от 70% до 90%+).",
+        reply_markup=get_settings_kb(user.get('solve_delay', 15), user.get('accuracy_mode', 'excellent')),
+        parse_mode="Markdown"
+    )
     await state.set_state(BotStates.SETTINGS)
 
 @dp.message(F.text == "📡 О НАС")
 async def about_main(message: types.Message, state: FSMContext):
-    await message.answer("📡 О ПРОЕКТЕ\n\nЭтот бот организован для помощи ученикам в автоматизации ЦДЗ.\n\n📢 Канал: @your_channel")
+    text = (
+        "📡 О ПРОЕКТЕ\n\n"
+        "Этот инновационный бот создан для того, чтобы облегчить учебный процесс и автоматизировать выполнение цифровых домашних заданий (ЦДЗ) на платформе МЭШ/Мосрег.\n\n"
+        "Мы постоянно работаем над улучшением алгоритмов и добавлением новых функций! ✨\n\n"
+        "📢 Канал проекта: @your_channel"
+    )
+    await message.answer(text)
 
 @dp.message(F.text == "💬 ПОДДЕРЖКА")
 async def support_main(message: types.Message, state: FSMContext):
-    await message.answer("💬 ЧАТ ПОДДЕРЖКИ\n\n🔗 Ссылка: [Перейти в чат](https://t.me/your_support_chat)", parse_mode="Markdown")
+    text = (
+        "💬 ЧАТ ПОДДЕРЖКИ\n\n"
+        "Если у вас возникли вопросы, предложения или вы столкнулись с ошибкой — мы всегда готовы помочь!\n\n"
+        "🔗 Ссылка на чат: [Перейти в чат](https://t.me/your_support_chat)"
+    )
+    await message.answer(text, parse_mode="Markdown")
 
 # ─── CALLBACKS ───
 
