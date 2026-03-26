@@ -42,6 +42,7 @@ class ParserService:
         url = "https://authedu.mosreg.ru/v2/token/refresh"
         headers = self.base_headers.copy()
         headers['Authorization'] = f'Bearer {access_token}'
+        headers['auth-token'] = access_token
         async with aiohttp.ClientSession() as session:
             try:
                 async with session.get(url, headers=headers, timeout=15) as resp:
@@ -49,8 +50,10 @@ class ParserService:
                         new_token = await resp.text()
                         new_token = new_token.strip().strip('"')
                         if new_token.startswith('eyJ'):
-                            logger.info("Token refreshed via v2/token/refresh")
+                            logger.info("Token refreshed successfully")
                             return new_token
+                    else:
+                        logger.warning(f"Refresh failed: {resp.status}")
             except Exception as e:
                 logger.error(f"Token refresh error: {e}")
         return None
