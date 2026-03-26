@@ -169,3 +169,10 @@ class Database:
             
             self.add_stats(user_id, "Тест", "auto_solve", success=1, tokens_saved=500)
             conn.commit()
+
+    def get_all_users_with_tokens(self):
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT user_id, token_mos FROM users WHERE token_mos IS NOT NULL")
+            rows = cursor.fetchall()
+            return [{"user_id": r[0], "token_mos": r[1]} for r in rows]
