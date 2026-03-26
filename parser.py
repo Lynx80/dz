@@ -148,26 +148,48 @@ class ParserService:
                             user_info.update({k: v for k, v in p.items() if v})
                             return user_info
 
+                # Шаг 3.5: Пробуем новый API (api.myschool) согласно OctoDiary
+                try:
+                    async with session.get("https://api.myschool.mosreg.ru/family/mobile/v1/profile", headers=headers, timeout=5) as resp:
+                        logger.info(f"Step 3.5 (api.myschool) status: {resp.status}")
+                        if resp.status == 200:
+                            data = await resp.json()
+                            children = data.get('children', [])
+                            if children:
+                                p = self._parse_profile(children[0])
+                                # Если имя нашлось, обновляем и возвращаем
+                                if p.get('first_name'):
+                                    user_info.update({k: v for k, v in p.items() if v})
+                                    return user_info
+                except Exception as e:
+                    logger.warning(f"Step 3.5 error: {e}")
+
                 # Шаг 4: Пробуем API пользователей /me (обычно содержит имя)
-                async with session.get("https://myschool.mosreg.ru/acl/api/users/me", headers=headers, timeout=5) as resp:
-                    logger.info(f"Step 4 (/users/me) status: {resp.status}")
-                    if resp.status == 200:
-                        p = await resp.json()
-                        logger.info(f"Got profile from /users/me: {p}")
-                        user_info["first_name"] = user_info["first_name"] or p.get('first_name') or p.get('firstname') or p.get('name')
-                        user_info["last_name"] = user_info["last_name"] or p.get('last_name') or p.get('lastname')
-                        user_info["student_id"] = user_info["student_id"] or str(p.get('id') or p.get('person_id') or '')
+                try:
+                    async with session.get("https://myschool.mosreg.ru/acl/api/users/me", headers=headers, timeout=5) as resp:
+                        logger.info(f"Step 4 (/users/me) status: {resp.status}")
+                        if resp.status == 200:
+                            p = await resp.json()
+                            logger.info(f"Got profile from /users/me: {p}")
+                            user_info["first_name"] = user_info["first_name"] or p.get('first_name') or p.get('firstname') or p.get('name')
+                            user_info["last_name"] = user_info["last_name"] or p.get('last_name') or p.get('lastname')
+                            user_info["student_id"] = user_info["student_id"] or str(p.get('id') or p.get('person_id') or '')
+                except Exception as e:
+                    logger.warning(f"Step 4 error: {e}")
 
                 # Шаг 5: Пробуем API /users/profile
                 if not user_info["first_name"]:
-                    async with session.get("https://myschool.mosreg.ru/acl/api/users/profile", headers=headers, timeout=5) as resp:
-                        logger.info(f"Step 5 (/users/profile) status: {resp.status}")
-                        if resp.status == 200:
-                            p = await resp.json()
-                            logger.info(f"Got profile from /users/profile: {p}")
-                            user_info["first_name"] = p.get('first_name') or p.get('firstname')
-                            user_info["last_name"] = p.get('last_name') or p.get('lastname')
-                            user_info["student_id"] = user_info["student_id"] or str(p.get('id') or p.get('person_id') or '')
+                    try:
+                        async with session.get("https://myschool.mosreg.ru/acl/api/users/profile", headers=headers, timeout=5) as resp:
+                            logger.info(f"Step 5 (/users/profile) status: {resp.status}")
+                            if resp.status == 200:
+                                p = await resp.json()
+                                logger.info(f"Got profile from /users/profile: {p}")
+                                user_info["first_name"] = p.get('first_name') or p.get('firstname')
+                                user_info["last_name"] = p.get('last_name') or p.get('lastname')
+                                user_info["student_id"] = user_info["student_id"] or str(p.get('id') or p.get('person_id') or '')
+                    except Exception as e:
+                        logger.warning(f"Step 5 error: {e}")
                 
                 # Шаг 6: Использование данных из активации
                 if activation and isinstance(activation, list):
@@ -179,14 +201,17 @@ class ParserService:
 
                 # Шаг 7: Если есть student_id но нет имени, пробуем API персоны
                 if user_info["student_id"] and not user_info["first_name"]:
-                    pid = user_info["student_id"]
-                    async with session.get(f"https://myschool.mosreg.ru/api/person/v1/persons/{pid}", headers=headers, timeout=5) as resp:
-                        logger.info(f"Step 7 (/persons/{pid}) status: {resp.status}")
-                        if resp.status == 200:
-                            p = await resp.json()
-                            logger.info(f"Got profile from /persons: {p}")
-                            user_info["first_name"] = p.get('first_name') or p.get('firstname') or p.get('name', '').split()[0]
-                            user_info["last_name"] = p.get('last_name') or p.get('lastname')
+                    try:
+                        pid = user_info["student_id"]
+                        async with session.get(f"https://myschool.mosreg.ru/api/person/v1/persons/{pid}", headers=headers, timeout=5) as resp:
+                            logger.info(f"Step 7 (/persons/{pid}) status: {resp.status}")
+                            if resp.status == 200:
+                                p = await resp.json()
+                                logger.info(f"Got profile from /persons: {p}")
+                                user_info["first_name"] = p.get('first_name') or p.get('firstname') or p.get('name', '').split()[0]
+                                user_info["last_name"] = p.get('last_name') or p.get('lastname')
+                    except Exception as e:
+                        logger.warning(f"Step 7 error: {e}")
                 
                 # Финальная проверка: если имя так и не найдено
                 if not user_info["first_name"]:
