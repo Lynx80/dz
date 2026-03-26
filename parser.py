@@ -102,12 +102,15 @@ class ParserService:
                 payload = parts[1]
                 payload += '=' * (-len(payload) % 4)
                 decoded = json.loads(base64.b64decode(payload).decode('utf-8'))
+                logger.info(f"JWT Payload keys: {list(decoded.keys())}")
                 
                 # Ищем имя в разных возможных полях JWT
                 raw_name = decoded.get('name') or decoded.get('given_name') or decoded.get('fname') or decoded.get('first_name')
                 if raw_name:
-                    user_info["first_name"] = raw_name.split()[0]
+                    user_info["first_name"] = str(raw_name).split()[0]
                     logger.info(f"Extracted name from JWT: {user_info['first_name']}")
+                else:
+                    logger.warning(f"No name found in JWT. Available keys: {list(decoded.keys())}")
                 
                 user_info["student_id"] = str(decoded.get('sub', '') or decoded.get('person_id', ''))
         except Exception as e:
