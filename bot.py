@@ -417,9 +417,11 @@ async def process_token(message: types.Message, state: FSMContext):
     profile = await parser.fetch_mosreg_profile(token)
     if profile:
         db.update_user(message.from_user.id, token_mos=token, first_name=profile['first_name'], grade=profile.get('grade', ''), student_id=profile['student_id'])
-        await msg.edit_text(f"✅ УСПЕШНО! ПРИВЕТ, {profile['first_name']}!", reply_markup=get_main_menu_kb())
+        await msg.delete()
+        await message.answer(f"✅ УСПЕШНО! ПРИВЕТ, {profile['first_name']}!", reply_markup=get_main_menu_kb())
         await state.set_state(BotStates.MAIN_MENU)
-    else: await msg.edit_text("❌ ОШИБКА! ТОКЕН НЕВЕРЕН.")
+    else:
+        await msg.edit_text("❌ ОШИБКА! ТОКЕН НЕВЕРЕН.")
 
 @dp.callback_query(F.data == "what_is_token")
 async def explain_token(call: types.CallbackQuery):
