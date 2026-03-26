@@ -102,11 +102,11 @@ def get_hw_action_kb(subject_name):
     return builder.as_markup()
 
 def get_settings_kb(solve_delay=15, accuracy_mode="excellent"):
-    accuracy_map = {"modest": "Обычный (80%)", "advanced": "Перспективный (90%)", "excellent": "Отличник (100%)"}
-    acc_text = accuracy_map.get(accuracy_mode, "Отличник (100%)")
+    accuracy_map = {"modest": "Базовый (70+%)", "advanced": "Стандарт (80+%)", "excellent": "Максимум (90+%)"}
+    acc_text = accuracy_map.get(accuracy_mode, "Максимум (90+%)")
     
     builder = InlineKeyboardBuilder()
-    builder.button(text=f"⏱ Скорость: {solve_delay} мин", callback_data="set_speed_menu")
+    builder.button(text=f"⏱ Время решения: {solve_delay} мин", callback_data="set_speed_menu")
     builder.button(text=f"🎯 Точность: {acc_text}", callback_data="set_accuracy_menu")
     builder.button(text="🔄 Обновить данные", callback_data="refresh_data")
     builder.button(text="💳 Подписка", callback_data="subscription_info")
@@ -125,9 +125,9 @@ def get_speed_kb():
 
 def get_accuracy_kb():
     builder = InlineKeyboardBuilder()
-    builder.button(text="🥉 Обычный (80%)", callback_data="save_acc_modest")
-    builder.button(text="🥈 Перспективный (90%)", callback_data="save_acc_advanced")
-    builder.button(text="🥇 Отличник (100%)", callback_data="save_acc_excellent")
+    builder.button(text="🥉 Базовый (70+%)", callback_data="save_acc_modest")
+    builder.button(text="🥈 Стандарт (80+%)", callback_data="save_acc_advanced")
+    builder.button(text="🥇 Максимум (90+%)", callback_data="save_acc_excellent")
     builder.button(text="🔙 Назад", callback_data="back_to_settings")
     builder.adjust(1)
     return builder.as_markup()
@@ -531,9 +531,9 @@ async def back_to_settings(call: types.CallbackQuery, state: FSMContext):
 async def speed_menu(call: types.CallbackQuery):
     await call.answer()
     await call.message.edit_text(
-        "⏱ **Настройка скорости решения**\n\n"
-        "Выберите время задержки перед отправкой ответов. "
-        "Это помогает имитировать поведение человека.\n\n"
+        "⏱ **Настройка времени всего решения**\n\n"
+        "Выберите желаемое общее время выполнения теста. "
+        "Бот будет распределять паузы между вопросами так, чтобы уложиться в это время.\n\n"
         "По умолчанию: **15 минут**",
         reply_markup=get_speed_kb(),
         parse_mode="Markdown"
@@ -556,7 +556,8 @@ async def accuracy_menu(call: types.CallbackQuery):
     await call.answer()
     await call.message.edit_text(
         "🎯 **Выбор режима точности**\n\n"
-        "Выберите желаемый процент правильных ответов для ваших тестов:",
+        "Выберите желаемый процент правильных ответов. Чем выше точность, тем больше внимания системы может привлечь результат.\n\n"
+        "⚠️ **Важно:** Бот может ошибаться, мы не гарантируем 100% верных ответов в любом режиме.",
         reply_markup=get_accuracy_kb(),
         parse_mode="Markdown"
     )
