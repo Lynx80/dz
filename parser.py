@@ -118,7 +118,7 @@ class ParserService:
                         children = data.get('children', [])
                         if children: return self._parse_profile(children[0])
                     
-                # Шаг 3: Если API профиля все еще не дал имя, пробуем мобильный сабсистем (для УЧЕНИКОВ)
+                # Шаг 3: Пробовали family, если не вышло — пробуем мобильный (для УЧЕНИКОВ)
                 headers['X-Mes-Subsystem'] = 'mobile'
                 async with session.get("https://authedu.mosreg.ru/api/family/mobile/v1/profile", headers=headers, timeout=5) as resp:
                     if resp.status == 200:
@@ -126,7 +126,19 @@ class ParserService:
                         children = data.get('children', [])
                         if children: return self._parse_profile(children[0])
 
-                # Шаг 4: Если совсем глухо, используем данные из активации
+                # Шаг 4: Пробуем API пользователей напрямую
+                async with session.get("https://myschool.mosreg.ru/acl/api/users/profile", headers=headers, timeout=5) as resp:
+                    if resp.status == 200:
+                        p = await resp.json()
+                        logger.info(f"Got profile from /users/profile: {p}")
+                        return {
+                            "first_name": p.get('first_name') or p.get('firstname') or 'Пользователь',
+                            "last_name": p.get('last_name') or p.get('lastname') or '',
+                            "grade": "",
+                            "student_id": str(p.get('id') or p.get('person_id') or '')
+                        }
+
+                # Шаг 5: Если совсем глухо, используем данные из активации
                 if activation and isinstance(activation, list):
                     for p in activation:
                         if p.get('type') in ['StudentProfile', 'Learner', 'Profile']:
@@ -135,11 +147,6 @@ class ParserService:
                             fname = p.get('first_name') or p.get('firstname') or p.get('middle_name') or 'Пользователь'
                             lname = p.get('last_name') or p.get('lastname') or ''
                             
-                            # Если есть full_name, можно парсить его
-                            full_name = p.get('full_name') or ''
-                            if full_name and fname == 'Пользователь':
-                                fname = full_name.split()[1] if len(full_name.split()) > 1 else full_name
-                            
                             return {
                                 "first_name": fname,
                                 "last_name": lname,
@@ -147,6 +154,18 @@ class ParserService:
                                 "student_id": str(p.get('id') or p.get('person_id') or '')
                             }
                 
+                # Шаг 6: Последний шанс — декодируем JWT
+                try:
+                    import base64
+                    parts = access_token.split('.')
+                    if len(parts) == 3:
+                        payload = parts[1]
+                        payload += '=' * (-len(payload) % 4)
+                        decoded = json.loads(base64.b64decode(payload).decode('utf-8'))
+                        if 'name' in decoded:
+                            return {"first_name": decoded['name'].split()[0], "last_name": "", "grade": "", "student_id": decoded.get('sub', '')}
+                except: pass
+
                 raise MosregAuthError("Не удалось получить профиль")
             except MosregAuthError:
                 raise
