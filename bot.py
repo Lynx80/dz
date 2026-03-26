@@ -113,6 +113,13 @@ def get_settings_kb(solve_delay=15, accuracy_mode="advanced"):
     builder.adjust(1)
     return builder.as_markup()
 
+def get_profile_kb():
+    builder = InlineKeyboardBuilder()
+    builder.button(text="🗑 УДАЛИТЬ ТОКЕН", callback_data="delete_token_confirm")
+    builder.button(text="🔙 НАЗАД", callback_data="back_to_main")
+    builder.adjust(1)
+    return builder.as_markup()
+
 def get_speed_kb(current_speed=15):
     builder = InlineKeyboardBuilder()
     for s in [1, 5, 10, 15, 20, 25]:
@@ -202,7 +209,7 @@ async def profile_main(message: types.Message, state: FSMContext):
         f"⭐ СРЕДНИЙ БАЛЛ: {stats['avg']}\n"
         f"💎 СЭКОНОМЛЕНО: {stats['saved']} ТОКЕНОВ\n"
     )
-    await message.answer(text)
+    await message.answer(text, reply_markup=get_profile_kb())
 
 @dp.message(F.text == "⚙️ НАСТРОЙКИ")
 async def settings_start(message: types.Message, state: FSMContext):
@@ -395,8 +402,47 @@ async def back_to_settings(call: types.CallbackQuery):
     user = db.get_user(call.from_user.id)
     await call.message.edit_text("⚙️ НАСТРОЙКИ БОТА:", reply_markup=get_settings_kb(user.get('solve_delay', 15), user.get('accuracy_mode', 'excellent')))
 
+@dp.callback_query(F.data == "delete_token_confirm")
+async def delete_token_confirm(call: types.CallbackQuery):
+    builder = InlineKeyboardBuilder()
+    builder.button(text="✅ ДА, УДАЛИТЬ", callback_data="delete_token_final")
+    builder.button(text="❌ ОТМЕНА", callback_data="back_to_main")
+    builder.adjust(2)
+    await call.message.edit_text("⚠️ ВЫ УВЕРЕНЫ, ЧТО ХОТИТЕ УДАЛИТЬ ТОКЕН?", reply_markup=builder.as_markup())
+
+@dp.callback_query(F.data == "delete_token_final")
+async def delete_token_final(call: types.CallbackQuery):
+    db.update_user(call.from_user.id, token_mos=None)
+    await call.answer("🗑 ТОКЕН УДАЛЕН", show_alert=True)
+    await back_to_main(call, None)
+
+# ─── ФОНОВОЕ ОБНОВЛЕНИЕ ───
+
+async def token_refresher_task():
+    """Фоновая задача для автоматического обновления токенов каждые 40 минут."""
+    while True:
+        try:
+            logger.info("Starting background token refresh cycle...")
+            users = db.get_all_users_with_tokens()
+            for u in users:
+                new_token = await parser.refresh_token(u['token_mos'])
+                if new_token:
+                    db.update_user(u['user_id'], token_mos=new_token)
+                    logger.info(f"Refreshed token for user {u['user_id']}")
+                else:
+                    logger.warning(f"Could not refresh token for user {u['user_id']}")
+                # Небольшая пауза между пользователями
+                await asyncio.sleep(2)
+        except Exception as e:
+            logger.error(f"Refresher task error: {e}")
+        
+        # Ждем 40 минут
+        await asyncio.sleep(40 * 60)
+
 async def main():
     logger.info("Bot started!")
+    # Запуск фоновой задачи
+    asyncio.create_task(token_refresher_task())
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
