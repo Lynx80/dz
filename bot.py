@@ -451,10 +451,10 @@ async def delete_token_confirm(call: types.CallbackQuery):
     await call.message.edit_text("⚠️ ВЫ УВЕРЕНЫ, ЧТО ХОТИТЕ УДАЛИТЬ ТОКЕН?", reply_markup=builder.as_markup())
 
 @dp.callback_query(F.data == "delete_token_final")
-async def delete_token_final(call: types.CallbackQuery):
+async def delete_token_final(call: types.CallbackQuery, state: FSMContext):
     db.update_user(call.from_user.id, token_mos=None)
     await call.answer("🗑 ТОКЕН УДАЛЕН", show_alert=True)
-    await back_to_main(call, None)
+    await back_to_main(call, state)
 
 # ─── ФОНОВОЕ ОБНОВЛЕНИЕ ───
 
