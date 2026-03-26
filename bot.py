@@ -16,7 +16,7 @@ from aiogram.exceptions import TelegramBadRequest
 from aiogram.client.session.aiohttp import AiohttpSession
 
 from database import Database
-from parser import ParserService
+from parser import ParserService, MosregAuthError
 
 load_dotenv()
 
@@ -266,8 +266,18 @@ async def manual_day_select(call: types.CallbackQuery, state: FSMContext):
     user = db.get_user(call.from_user.id)
     
     # 1. Получаем данные
-    schedule = await parser.get_mosreg_schedule(user['token_mos'], user['student_id'], date_str)
-    homeworks = await parser.get_mosreg_homework(user['token_mos'], user['student_id'], date_str)
+    try:
+        schedule = await parser.get_mosreg_schedule(user['token_mos'], user['student_id'], date_str)
+        homeworks = await parser.get_mosreg_homework(user['token_mos'], user['student_id'], date_str)
+    except MosregAuthError:
+        await call.message.edit_text(
+            "⚠️ ВАША СЕССИЯ ИСТЕКЛА!\n\nТОКЕН БОЛЬШЕ НЕ ДЕЙСТВИТЕЛЕН. ПОЖАЛУЙСТА, ОБНОВИТЕ ЕГО:\n"
+            "🔗 [ПОЛУЧИТЬ НОВЫЙ ТОКЕН](https://authedu.mosreg.ru/v2/token/refresh)\n\n"
+            "ПРОСТО ОТПРАВЬТЕ НОВЫЙ ТОКЕН МНЕ.",
+            reply_markup=InlineKeyboardBuilder().button(text="🔙 В МЕНЮ", callback_data="back_to_main").as_markup(),
+            parse_mode="Markdown"
+        )
+        return
     
     text = f"📍 РАСПИСАНИЕ НА {date_str}:\n🗓️ ЗАДАНО ЦДЗ: {len(homeworks)}\n━━━━━━━━━━━━━━━\n\n"
     
@@ -302,7 +312,17 @@ async def batch_solve_handler(call: types.CallbackQuery, state: FSMContext):
     parts = call.data.split("_")
     date_str, mode = parts[2], parts[3]
     user = db.get_user(call.from_user.id)
-    homeworks = await parser.get_mosreg_homework(user['token_mos'], user['student_id'], date_str)
+    try:
+        homeworks = await parser.get_mosreg_homework(user['token_mos'], user['student_id'], date_str)
+    except MosregAuthError:
+        await call.message.edit_text(
+            "⚠️ ВАША СЕССИЯ ИСТЕКЛА!\n\nТОКЕН БОЛЬШЕ НЕ ДЕЙСТВИТЕЛЕН. ПОЖАЛУЙСТА, ОБНОВИТЕ ЕГО:\n"
+            "🔗 [ПОЛУЧИТЬ НОВЫЙ ТОКЕН](https://authedu.mosreg.ru/v2/token/refresh)\n\n"
+            "ПРОСТО ОТПРАВЬТЕ НОВЫЙ ТОКЕН МНЕ.",
+            reply_markup=InlineKeyboardBuilder().button(text="🔙 В МЕНЮ", callback_data="back_to_main").as_markup(),
+            parse_mode="Markdown"
+        )
+        return
     
     if not homeworks:
         await call.answer("❌ НЕТ ЗАДАНИЙ ДЛЯ РЕШЕНИЯ", show_alert=True)
@@ -322,7 +342,17 @@ async def batch_solve_handler(call: types.CallbackQuery, state: FSMContext):
 async def selective_solve_handler(call: types.CallbackQuery, state: FSMContext):
     date_str = call.data.replace("selective_solve_", "")
     user = db.get_user(call.from_user.id)
-    hws = await parser.get_mosreg_homework(user['token_mos'], user['student_id'], date_str)
+    try:
+        hws = await parser.get_mosreg_homework(user['token_mos'], user['student_id'], date_str)
+    except MosregAuthError:
+        await call.message.edit_text(
+            "⚠️ ВАША СЕССИЯ ИСТЕКЛА!\n\nТОКЕН БОЛЬШЕ НЕ ДЕЙСТВИТЕЛЕН. ПОЖАЛУЙСТА, ОБНОВИТЕ ЕГО:\n"
+            "🔗 [ПОЛУЧИТЬ НОВЫЙ ТОКЕН](https://authedu.mosreg.ru/v2/token/refresh)\n\n"
+            "ПРОСТО ОТПРАВЬТЕ НОВЫЙ ТОКЕН МНЕ.",
+            reply_markup=InlineKeyboardBuilder().button(text="🔙 В МЕНЮ", callback_data="back_to_main").as_markup(),
+            parse_mode="Markdown"
+        )
+        return
     builder = InlineKeyboardBuilder()
     for i, hw in enumerate(hws):
         if hw.get('link'): builder.button(text=f"📝 {hw['subject'].upper()}", callback_data=f"solve_task_{i}_{date_str}")
@@ -335,7 +365,11 @@ async def solve_task_handler(call: types.CallbackQuery, state: FSMContext):
     parts = call.data.split("_")
     idx, date_str = int(parts[2]), parts[3]
     user = db.get_user(call.from_user.id)
-    hws = await parser.get_mosreg_homework(user['token_mos'], user['student_id'], date_str)
+    try:
+        hws = await parser.get_mosreg_homework(user['token_mos'], user['student_id'], date_str)
+    except MosregAuthError:
+        await call.answer("⚠️ СЕССИЯ ИСТЕКЛА", show_alert=True)
+        return
     hw = hws[idx]
     await call.message.edit_text(f"🧩 НАЧИНАЮ РЕШЕНИЕ: {hw['subject'].upper()}...")
     res = await parser.solve_test(call.from_user.id, hw['link'])
@@ -425,18 +459,23 @@ async def token_refresher_task():
             logger.info("Starting background token refresh cycle...")
             users = db.get_all_users_with_tokens()
             for u in users:
-                new_token = await parser.refresh_token(u['token_mos'])
-                if new_token:
-                    db.update_user(u['user_id'], token_mos=new_token)
-                    logger.info(f"Refreshed token for user {u['user_id']}")
-                else:
-                    logger.warning(f"Could not refresh token for user {u['user_id']}")
+                try:
+                    new_token = await parser.refresh_token(u['token_mos'])
+                    if new_token:
+                        db.update_user(u['user_id'], token_mos=new_token)
+                        logger.info(f"Refreshed token for user {u['user_id']}")
+                    else:
+                        logger.warning(f"Could not refresh token for user {u['user_id']} (no response)")
+                except MosregAuthError:
+                    logger.warning(f"Token for user {u['user_id']} is dead. Stopping refresher for this user.")
+                    # Опционально: db.update_user(u['user_id'], token_mos=None) 
+                    # Но лучше оставить как есть, чтобы bot.py показал ошибку в UI
+                
                 # Небольшая пауза между пользователями
                 await asyncio.sleep(2)
         except Exception as e:
             logger.error(f"Refresher task error: {e}")
         
-        # Ждем 40 минут
         await asyncio.sleep(40 * 60)
 
 async def main():
