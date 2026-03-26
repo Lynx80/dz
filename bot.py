@@ -12,6 +12,7 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.utils.keyboard import ReplyKeyboardBuilder, InlineKeyboardBuilder
 from aiogram.types import ReplyKeyboardMarkup, InlineKeyboardMarkup
+from aiogram.exceptions import TelegramBadRequest
 
 from database import Database
 from parser import ParserService
@@ -553,27 +554,36 @@ async def save_speed(call: types.CallbackQuery):
     await call.answer()
     speed = int(call.data.replace("save_speed_", ""))
     db.update_user(call.from_user.id, solve_delay=speed)
-    await call.message.edit_reply_markup(reply_markup=get_speed_kb(speed))
+    try:
+        await call.message.edit_reply_markup(reply_markup=get_speed_kb(speed))
+    except TelegramBadRequest:
+        pass
 
 @dp.callback_query(F.data == "set_accuracy_menu")
 async def accuracy_menu(call: types.CallbackQuery):
     await call.answer()
     user = db.get_user(call.from_user.id)
-    await call.message.edit_text(
-        "🎯 **Выбор режима точности**\n\n"
-        "Выберите желаемый процент правильных ответов. Чем выше точность, тем больше внимания системы может привлечь результат.\n\n"
-        "⚠️ **Важно:** Бот может ошибаться, мы не гарантируем 100% верных ответов в любом режиме.\n"
-        "Рекомендуется: **Стандарт (80+%)**",
-        reply_markup=get_accuracy_kb(user.get('accuracy_mode', 'advanced')),
-        parse_mode="Markdown"
-    )
+    try:
+        await call.message.edit_text(
+            "🎯 **Выбор режима точности**\n\n"
+            "Выберите желаемый процент правильных ответов. Чем выше точность, тем больше внимания системы может привлечь результат.\n\n"
+            "⚠️ **Важно:** Бот может ошибаться, мы не гарантируем 100% верных ответов в любом режиме.\n"
+            "Рекомендуется: **Стандарт (80+%)**",
+            reply_markup=get_accuracy_kb(user.get('accuracy_mode', 'advanced')),
+            parse_mode="Markdown"
+        )
+    except TelegramBadRequest:
+        pass
 
 @dp.callback_query(F.data.startswith("save_acc_"))
 async def save_accuracy(call: types.CallbackQuery):
     await call.answer()
     mode = call.data.replace("save_acc_", "")
     db.update_user(call.from_user.id, accuracy_mode=mode)
-    await call.message.edit_reply_markup(reply_markup=get_accuracy_kb(mode))
+    try:
+        await call.message.edit_reply_markup(reply_markup=get_accuracy_kb(mode))
+    except TelegramBadRequest:
+        pass
 
 # Обработчик завершен (дубликат удален выше)
 
