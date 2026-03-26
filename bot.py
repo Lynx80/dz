@@ -95,23 +95,21 @@ def get_days_kb(week_offset=0, prefix="day"):
 
 def get_hw_action_kb(subject_name):
     builder = InlineKeyboardBuilder()
-    builder.button(text="🧠 Решать (Точно)", callback_data=f"solve_precise_{subject_name}")
-    builder.button(text="⚡ Решать (Быстро)", callback_data=f"solve_fast_{subject_name}")
-    builder.button(text="🔄 Обновить", callback_data="refresh_hw")
-    builder.button(text="🔙 Назад", callback_data="back_to_days")
+    builder.button(text="🧠 РЕШАТЬ (ТОЧНО)", callback_data=f"solve_precise_{subject_name}")
+    builder.button(text="⚡ РЕШАТЬ (БЫСТРО)", callback_data=f"solve_fast_{subject_name}")
+    builder.button(text="🔄 ОБНОВИТЬ", callback_data="refresh_hw")
+    builder.button(text="🔙 НАЗАД", callback_data="back_to_days")
     builder.adjust(2, 2)
     return builder.as_markup()
 
-def get_settings_kb(solve_delay=15, accuracy_mode="excellent"):
-    accuracy_map = {"modest": "Базовый (70+%)", "advanced": "Стандарт (80+%)", "excellent": "Максимум (90+%)"}
-    acc_text = accuracy_map.get(accuracy_mode, "Максимум (90+%)")
-    
+def get_settings_kb(solve_delay=15, accuracy_mode="advanced"):
     builder = InlineKeyboardBuilder()
-    builder.button(text=f"⏱ Время решения: {solve_delay} мин", callback_data="set_speed_menu")
-    builder.button(text=f"🎯 Точность: {acc_text}", callback_data="set_accuracy_menu")
-    builder.button(text="🔄 Обновить данные", callback_data="refresh_data")
-    builder.button(text="💳 Подписка", callback_data="subscription_info")
-    builder.button(text="🔙 Вернуться в главное меню", callback_data="back_to_main")
+    acc_text = {"modest": "70+%", "advanced": "80+%", "excellent": "90+%"}.get(accuracy_mode, "80+%")
+    builder.button(text=f"⏱ ВРЕМЯ РЕШЕНИЯ: {solve_delay} МИН", callback_data="set_speed_menu")
+    builder.button(text=f"🎯 ТОЧНОСТЬ: {acc_text}", callback_data="set_accuracy_menu")
+    builder.button(text="🔄 ОБНОВИТЬ ДАННЫЕ", callback_data="refresh_data")
+    builder.button(text="💳 ПОДПИСКА", callback_data="subscription_info")
+    builder.button(text="🔙 ВЕРНУТЬСЯ В ГЛАВНОЕ МЕНЮ", callback_data="back_to_main")
     builder.adjust(1)
     return builder.as_markup()
 
@@ -119,25 +117,25 @@ def get_speed_kb(current_speed=15):
     builder = InlineKeyboardBuilder()
     speeds = [1, 5, 10, 15, 20, 25]
     for s in speeds:
-        text = f"✅ {s} мин" if s == current_speed else f"{s} мин"
-        if s == 15: text += " (По умолчанию)"
+        text = f"✅ {s} МИН" if s == current_speed else f"{s} МИН"
+        if s == 15: text += " (ПО УМОЛЧАНИЮ)"
         builder.button(text=text, callback_data=f"save_speed_{s}")
-    builder.button(text="🔙 Назад", callback_data="back_to_settings")
+    builder.button(text="🔙 НАЗАД", callback_data="back_to_settings")
     builder.adjust(1)
     return builder.as_markup()
 
 def get_accuracy_kb(current_acc="advanced"):
     builder = InlineKeyboardBuilder()
     modes = [
-        ("modest", "🥉 Базовый (70+%)"),
-        ("advanced", "🥈 Стандарт (80+%)"),
-        ("excellent", "🥇 Максимум (90+%)")
+        ("modest", "🥉 БАЗОВЫЙ (70+%)"),
+        ("advanced", "🥈 СТАНДАРТ (80+%)"),
+        ("excellent", "🥇 МАКСИМУМ (90+%)")
     ]
     for m_id, m_text in modes:
         text = f"✅ {m_text}" if m_id == current_acc else m_text
-        if m_id == "advanced": text += " (По умолчанию)"
+        if m_id == "advanced": text += " (ПО УМОЛЧАНИЮ)"
         builder.button(text=text, callback_data=f"save_acc_{m_id}")
-    builder.button(text="🔙 Назад", callback_data="back_to_settings")
+    builder.button(text="🔙 НАЗАД", callback_data="back_to_settings")
     builder.adjust(1)
     return builder.as_markup()
 
@@ -226,13 +224,13 @@ async def profile_main(message: types.Message, state: FSMContext):
     status_text = "Привязан" if user.get('token_mos') else "Не привязан"
     
     profile_text = (
-        f"👤 **Профиль пользователя**\n"
+        f"👤 ПРОФИЛЬ ПОЛЬЗОВАТЕЛЯ\n"
         f"──────────────────\n"
         f"📛 Имя: {user.get('first_name') or 'хлеб'}\n"
         f"🏫 Класс: {user.get('grade') or 'Не указан'}\n"
         f"🔑 Статус: {status_icon} {status_text}\n"
         f"──────────────────\n"
-        f"📊 **Статистика:**\n"
+        f"📊 СТАТИСТИКА:\n"
         f"✅ Решено ДЗ: {stats['solved']}\n"
         f"⭐ Средний балл: {stats['avg']}\n"
     )
@@ -246,20 +244,20 @@ async def stats_redirect(message: types.Message, state: FSMContext):
 @dp.message(F.text == "📡 О нас")
 async def about_main(message: types.Message, state: FSMContext):
     await message.answer(
-        "📡 **О проекте**\n\n"
-        "Этот бот создан для помощи ученикам в автоматизации ЦДЗ.\n"
-        "Мы используем ИИ Gemini и Playwright для решения тестов.\n\n"
-        "📢 Канал: @your_channel\n"
-        "👥 Разработчик: @developer"
+        "📡 О ПРОЕКТЕ\n\n"
+        "ЭТОТ БОТ СОЗДАН ДЛЯ ПОМОЩИ УЧЕНИКАМ В АВТОМАТИЗАЦИИ ЦДЗ.\n"
+        "МЫ ИСПОЛЬЗУЕМ ИИ GEMINI И PLAYWRIGHT ДЛЯ РЕШЕНИЯ ТЕСТОВ.\n\n"
+        "📢 КАНАЛ: @your_channel\n"
+        "👥 РАЗРАБОТЧИК: @developer"
     )
 
 @dp.message(F.text == "💬 Поддержка")
 @dp.message(F.text == "💳 Поддержка")
 async def support_main(message: types.Message, state: FSMContext):
     await message.answer(
-        "💬 **Чат поддержки**\n\n"
-        "Если у тебя возникли вопросы или проблемы в работе бота, пиши нам в чат!\n\n"
-        "🔗 Ссылка: [Перейти в чат](https://t.me/your_support_chat)",
+        "💬 ЧАТ ПОДДЕРЖКИ\n\n"
+        "ЕСЛИ У ТЕБЯ ВОЗНИКЛИ ВОПРОСЫ ИЛИ ПРОБЛЕМЫ В РАБОТЕ БОТА, ПИШИ НАМ В ЧАТ!\n\n"
+        "🔗 ССЫЛКА: [ПЕРЕЙТИ В ЧАТ](https://t.me/your_support_chat)",
         parse_mode="Markdown"
     )
 
@@ -267,8 +265,8 @@ async def support_main(message: types.Message, state: FSMContext):
 async def settings_start(message: types.Message, state: FSMContext):
     user = db.get_user(message.from_user.id)
     await message.answer(
-        "⚙️ **Настройки бота:**\n\n"
-        "Здесь можно настроить скорость решения тестов и желаемую точность ответов.",
+        "⚙️ НАСТРОЙКИ БОТА:\n\n"
+        "ЗДЕСЬ МОЖНО НАСТРОИТЬ СКОРОСТЬ РЕШЕНИЯ ТЕСТОВ И ЖЕЛАЕМУЮ ТОЧНОСТЬ ОТВЕТОВ.",
         reply_markup=get_settings_kb(user.get('solve_delay', 15), user.get('accuracy_mode', 'excellent'))
     )
     await state.set_state(BotStates.SETTINGS)
@@ -412,12 +410,21 @@ async def clear_cache(call: types.CallbackQuery):
     # В реальности тут удаление из БД
     await call.answer("🧹 Кеш очищен!", show_alert=True)
 
+# Навигация назад к дням
+@dp.callback_query(F.data == "back_to_days")
+async def back_to_days_handler(call: types.CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    offset = data.get('week_offset', 0)
+    # Определяем префикс по текущему стейту (или по смыслу)
+    prefix = "manual" # Т.к. только в ручном режиме есть детальный просмотр
+    await call.message.edit_text("📅 ВЫБЕРИТЕ ДЕНЬ:", reply_markup=get_days_kb(offset, prefix=prefix), parse_mode="Markdown")
+
 # Навигация назад к неделям
 @dp.callback_query(F.data.startswith("back_to_weeks_"))
 async def back_to_weeks(call: types.CallbackQuery, state: FSMContext):
     prefix = call.data.replace("back_to_weeks_", "")
     await state.set_state(BotStates.WEEK_SELECTION if prefix == "manual" else BotStates.AUTO_SOLVE_WEEK)
-    await call.message.edit_text("📅 **Выберите неделю:**", reply_markup=get_week_kb(prefix=prefix), parse_mode="Markdown")
+    await call.message.edit_text("📅 ВЫБЕРИТЕ НЕДЕЛЮ:", reply_markup=get_week_kb(prefix=prefix), parse_mode="Markdown")
 
 # ─── НАСТРОЙКИ И ПРОФИЛЬ ───
 
@@ -427,13 +434,13 @@ async def view_profile(call: types.CallbackQuery):
     stats = db.get_stats(call.from_user.id)
     
     profile_text = (
-        f"👤 **Профиль пользователя**\n"
+        f"👤 ПРОФИЛЬ ПОЛЬЗОВАТЕЛЯ\n"
         f"━━━━━━━━━━━━━━━\n"
         f"📛 Имя: {user.get('first_name') or 'Не указано'}\n"
         f"🏫 Класс: {user.get('grade') or 'Не указан'}\n"
-        f"🔑 Статус: {'✅ Подключен' if user.get('token_mos') else '❌ Не привязан'}\n"
+        f"🔑 Статус: {'✅ ПОДКЛЮЧЕН' if user.get('token_mos') else '❌ НЕ ПРИВЯЗАН'}\n"
         f"━━━━━━━━━━━━━━━\n"
-        f"📊 **Статистика:**\n"
+        f"📊 СТАТИСТИКА:\n"
         f"✅ Решено ДЗ: {stats['solved']}\n"
         f"⭐ Средний балл: {stats['avg']}\n"
         f"💎 Сэкономлено: {stats['saved']} токенов\n"
@@ -534,7 +541,7 @@ async def back_to_settings(call: types.CallbackQuery, state: FSMContext):
     await call.answer()
     user = db.get_user(call.from_user.id)
     await call.message.edit_text(
-        "⚙️ **Настройки бота:**",
+        "⚙️ НАСТРОЙКИ БОТА:",
         reply_markup=get_settings_kb(user.get('solve_delay', 15), user.get('accuracy_mode', 'excellent')),
         parse_mode="Markdown"
     )
@@ -547,10 +554,9 @@ async def speed_menu(call: types.CallbackQuery):
     await call.answer()
     user = db.get_user(call.from_user.id)
     await call.message.edit_text(
-        "⏱ **Настройка времени всего решения**\n\n"
-        "Выберите желаемое общее время выполнения теста. "
-        "Бот будет распределять паузы между вопросами так, чтобы уложиться в это время.\n\n"
-        "По умолчанию: **15 минут**",
+        "⏱ НАСТРОЙКА ВРЕМЕНИ ВСЕГО РЕШЕНИЯ\n\n"
+        "Выберите желаемое общее время выполнения теста. Бот будет распределять паузы между вопросами.\n\n"
+        "По умолчанию: **15 МИНУТ**",
         reply_markup=get_speed_kb(user.get('solve_delay', 15)),
         parse_mode="Markdown"
     )
@@ -565,9 +571,9 @@ async def save_speed(call: types.CallbackQuery):
     user = db.get_user(call.from_user.id)
     try:
         await call.message.edit_text(
-            "⏱ **Настройка времени всего решения**\n\n"
+            "⏱ НАСТРОЙКА ВРЕМЕНИ ВСЕГО РЕШЕНИЯ\n\n"
             "Выберите желаемое общее время выполнения теста. Бот будет распределять паузы между вопросами.\n\n"
-            f"Текущий выбор: **{speed} мин**",
+            f"Текущий выбор: **{speed} МИН**",
             reply_markup=get_speed_kb(user.get('solve_delay', 15)),
             parse_mode="Markdown"
         )
@@ -582,10 +588,10 @@ async def accuracy_menu(call: types.CallbackQuery):
     acc_text = {"modest": "70+%", "advanced": "80+%", "excellent": "90+%"}.get(acc, "80+%")
     try:
         await call.message.edit_text(
-            "🎯 **Выбор режима точности**\n\n"
+            "🎯 ВЫБОР РЕЖИМА ТОЧНОСТИ\n\n"
             f"Текущий режим: **{acc_text}**\n\n"
             "Выберите желаемый процент правильных ответов. Чем выше точность, тем больше внимания системы может привлечь результат.\n\n"
-            "⚠️ **Важно:** Бот может ошибаться, мы не гарантируем 100% верных ответов.",
+            "⚠️ Важно: Бот может ошибаться, мы не гарантируем 100% верных ответов.",
             reply_markup=get_accuracy_kb(acc),
             parse_mode="Markdown"
         )
@@ -602,10 +608,10 @@ async def save_accuracy(call: types.CallbackQuery):
     acc_text = {"modest": "70+%", "advanced": "80+%", "excellent": "90+%"}.get(mode, "80+%")
     try:
         await call.message.edit_text(
-            "🎯 **Выбор режима точности**\n\n"
+            "🎯 ВЫБОР РЕЖИМА ТОЧНОСТИ\n\n"
             f"Текущий режим: **{acc_text}**\n\n"
             "Выберите желаемый процент правильных ответов. Чем выше точность, тем больше внимания системы может привлечь результат.\n\n"
-            "⚠️ **Важно:** Бот может ошибаться, мы не гарантируем 100% верных ответов.",
+            "⚠️ Важно: Бот может ошибаться, мы не гарантируем 100% верных ответов.",
             reply_markup=get_accuracy_kb(user.get('accuracy_mode', 'advanced')),
             parse_mode="Markdown"
         )
