@@ -121,9 +121,10 @@ class ParserService:
             "student_id": str(child_data.get('id', ''))
         }
 
-    async def get_mosreg_schedule(self, access_token, student_id, date_str=None):
+    async def get_mosreg_schedule(self, access_token, student_id, date_str=None, retry_auth=True):
         """
         Получает расписание уроков (событий) для отображения пользователю.
+        retry_auth: если True, попробует активировать сессию при 401.
         """
         if not student_id: return []
         if not date_str: date_str = datetime.now().strftime('%Y-%m-%d')
@@ -132,6 +133,7 @@ class ParserService:
                f"?person_ids={student_id}&begin_date={date_str}&end_date={date_str}&expand=homework")
         headers = self.base_headers.copy()
         headers['Authorization'] = f'Bearer {access_token}'
+        headers['auth-token'] = access_token
         
         async with aiohttp.ClientSession() as session:
             try:
@@ -177,6 +179,10 @@ class ParserService:
                             
                         return schedule
                     elif resp.status == 401:
+                        if retry_auth:
+                            logger.info("401 detected in schedule, trying handshake retry...")
+                            await self._activate_session(access_token)
+                            return await self.get_mosreg_schedule(access_token, student_id, date_str, retry_auth=False)
                         raise MosregAuthError("Токен истек")
                     else:
                         logger.error(f"Schedule API error: {resp.status} - {await resp.text()}")
@@ -186,11 +192,12 @@ class ParserService:
                 logger.error(f"Schedule error: {e}")
         return await self.get_mosreg_schedule_v3(access_token, student_id, date_str)
 
-    async def get_mosreg_schedule_v3(self, access_token, student_id, date_str):
+    async def get_mosreg_schedule_v3(self, access_token, student_id, date_str, retry_auth=True):
         """Резервный метод получения расписания через v3 API"""
         url = f"https://authedu.mosreg.ru/api/family/v3/schedule?student_id={student_id}&date={date_str}"
         headers = self.base_headers.copy()
         headers['Authorization'] = f'Bearer {access_token}'
+        headers['auth-token'] = access_token
         
         async with aiohttp.ClientSession() as session:
             try:
@@ -209,6 +216,9 @@ class ParserService:
                             })
                         return schedule
                     elif resp.status == 401:
+                        if retry_auth:
+                            await self._activate_session(access_token)
+                            return await self.get_mosreg_schedule_v3(access_token, student_id, date_str, retry_auth=False)
                         raise MosregAuthError("Токен истек")
             except MosregAuthError:
                 raise
@@ -216,8 +226,8 @@ class ParserService:
                 logger.error(f"Schedule V3 error: {e}")
         return []
 
-    async def get_mosreg_homework(self, access_token, student_id, date_str=None):
-        """Получает список ЦДЗ заданий."""
+    async def get_mosreg_homework(self, access_token, student_id, date_str=None, retry_auth=True):
+        """Получает список ЦДЗ заданий с авто-восстановлением сессии."""
         if not student_id: return []
         if not date_str: date_str = datetime.now().strftime('%Y-%m-%d')
         
@@ -233,7 +243,6 @@ class ParserService:
                         data = await resp.json()
                         hws = []
                         for item in data:
-                            # Парсим только ЦДЗ
                             desc = item.get('description', '').lower()
                             if 'цдз' in desc or 'тест' in desc or 'выполнить' in desc:
                                 hws.append({
@@ -243,6 +252,10 @@ class ParserService:
                                 })
                         return hws
                     elif resp.status == 401:
+                        if retry_auth:
+                            logger.info("401 detected in homework, trying handshake retry...")
+                            await self._activate_session(access_token)
+                            return await self.get_mosreg_homework(access_token, student_id, date_str, retry_auth=False)
                         raise MosregAuthError("Токен истек")
             except MosregAuthError:
                 raise
