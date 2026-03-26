@@ -158,11 +158,15 @@ async def check_token(message: types.Message, user):
             "КАК ПОЛУЧИТЬ ТОКЕН:\n\n"
             "1️⃣ ПЕРЕЙДИ ПО ССЫЛКЕ:\n"
             "- [МОСКВА](https://school.mos.ru/?backUrl=https%3A%2F%2Fschool.mos.ru%2Fv2%2Ftoken%2Frefresh)\n"
-            "- [МОСКОВСКАЯ ОБЛАСТЬ](https://authedu.mosreg.ru/v2/token/refresh)\n\n"
-            "2️⃣ ВВЕДИ ЛОГИН И ПАРОЛЬ ОТ СВОЕГО АККАУНТА.\n\n"
+            "- ДЛЯ МОСКОВСКОЙ ОБЛАСТИ:\n"
+            "  • [ВОЙТИ В АККАУНТ](https://authedu.mosreg.ru/50/)\n"
+            "  • [ПОЛУЧИТЬ ТОКЕН](https://authedu.mosreg.ru/v2/token/refresh)\n\n"
+            "2️⃣ ВВЕДИ ЛОГИН И ПАРОЛЬ ОТ СВОЕГО АККАУНТА.\n"
+            "(МЫ ИХ НЕ ВИДИМ — ЭТО ТОЛЬКО ДЛЯ СИСТЕМЫ! 🔒)\n\n"
             "3️⃣ СКОПИРУЙ ТОКЕН С ОТКРЫВШЕЙСЯ СТРАНИЦЫ.\n"
             "(ОН НАЧИНАЕТСЯ С 'eyJhbG...')\n\n"
-            "4️⃣ ОТПРАВЬ ТОКЕН СЮДА, И НАШ БОТ СРАЗУ ПРИСТУПИТ К РАБОТЕ! 🚀"
+            "4️⃣ ОТПРАВЬ ТОКЕН СЮДА, И НАШ БОТ СРАЗУ ПРИСТУПИТ К РАБОТЕ! 🚀\n\n"
+            "P.S. ДЛЯ МО ОБЯЗАТЕЛЬНО СНАЧАЛА ВОЙТИ В АККАУНТ, А ПОТОМ ПОЛУЧИТЬ ТОКЕН! 🔥"
         )
         if isinstance(message, types.CallbackQuery):
             await message.message.answer(help_text, reply_markup=get_token_help_kb(), disable_web_page_preview=True)
