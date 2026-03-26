@@ -32,7 +32,7 @@ class Database:
                     logs_enabled INTEGER DEFAULT 1,
                     language TEXT DEFAULT 'ru',
                     solve_delay INTEGER DEFAULT 15,
-                    accuracy_mode TEXT DEFAULT 'excellent'
+                    accuracy_mode TEXT DEFAULT 'advanced'
                 )
             """)
             # Таблица кеша ответов ИИ (для экономии токенов)
@@ -76,7 +76,7 @@ class Database:
             cursor.execute("""
                 INSERT OR IGNORE INTO users (user_id, first_name, last_name, grade, student_id, solve_delay, accuracy_mode)
                 VALUES (?, ?, ?, ?, ?, ?, ?)
-            """, (user_id, first_name, last_name, grade, student_id, 15, 'excellent'))
+            """, (user_id, first_name, last_name, grade, student_id, 15, 'advanced'))
             conn.commit()
 
     def update_user(self, user_id, **kwargs):
