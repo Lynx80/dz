@@ -89,19 +89,24 @@ class ParserService:
         Активация сессии (handshake) обязательна для работы других API.
         """
         # Шаг 1: Активация сессии
-        await self._activate_session(access_token)
+        activation = await self._activate_session(access_token)
+        if activation:
+            logger.info(f"Activation successful: {str(activation)[:1000]}")
         
         # Шаг 2: Запрос профиля
         profile_url = "https://authedu.mosreg.ru/api/family/mobile/v1/profile"
         headers = self.base_headers.copy()
         headers['Authorization'] = f'Bearer {access_token}'
         headers['auth-token'] = access_token
+        headers['X-Mes-Subsystem'] = 'family'
         
         async with aiohttp.ClientSession() as session:
             try:
                 async with session.get(profile_url, headers=headers, timeout=10) as resp:
+                    logger.info(f"Profile API status: {resp.status}")
                     if resp.status == 200:
                         data = await resp.json()
+                        logger.info(f"Full profile data: {json.dumps(data, ensure_ascii=False)}")
                         children = data.get('children', [])
                         if children:
                             return self._parse_profile(children[0])
