@@ -206,30 +206,29 @@ async def profile_main(message: types.Message, state: FSMContext):
     stats = db.get_stats(message.from_user.id)
     text = (
         f"👤 ПРОФИЛЬ ПОЛЬЗОВАТЕЛЯ\n━━━━━━━━━━━━━━━\n"
-        f"📛 ИМЯ: {user.get('first_name') or 'НЕ УКАЗАНО'}\n"
-        f"🏫 КЛАСС: {user.get('grade') or 'НЕ УКАЗАН'}\n"
-        f"🔑 СТАТУС: {'✅ ПОДКЛЮЧЕН' if user.get('token_mos') else '❌ НЕ ПРИВЯЗАН'}\n"
+        f"📛 Имя: {user.get('first_name') or 'Не указано'}\n"
+        f"🏫 Класс: {user.get('grade') or 'Не указан'}\n"
+        f"🔑 Статус: {'✅ Подключен' if user.get('token_mos') else '❌ Не привязан'}\n"
         f"━━━━━━━━━━━━━━━\n📊 СТАТИСТИКА:\n"
-        f"✅ РЕШЕНО ДЗ: {stats['solved']}\n"
-        f"⭐ СРЕДНИЙ БАЛЛ: {stats['avg']}\n"
-        f"💎 СЭКОНОМЛЕНО: {stats['saved']} ТОКЕНОВ\n"
+        f"✅ Решено ДЗ: {stats['solved']}\n"
+        f"⭐ Средний балл: {stats['avg']}\n"
     )
     await message.answer(text, reply_markup=get_profile_kb())
 
 @dp.message(F.text == "⚙️ НАСТРОЙКИ")
 async def settings_start(message: types.Message, state: FSMContext):
     user = db.get_user(message.from_user.id)
-    await message.answer("⚙️ НАСТРОЙКИ БОТА:\n\nЗДЕСЬ МОЖНО НАСТРОИТЬ СКОРОСТЬ И ТОЧНОСТЬ.", 
+    await message.answer("⚙️ НАСТРОЙКИ БОТА:\n\nЗдесь можно настроить скорость и точность.", 
                          reply_markup=get_settings_kb(user.get('solve_delay', 15), user.get('accuracy_mode', 'excellent')))
     await state.set_state(BotStates.SETTINGS)
 
 @dp.message(F.text == "📡 О НАС")
 async def about_main(message: types.Message, state: FSMContext):
-    await message.answer("📡 О ПРОЕКТЕ\n\nЭТОТ БОТ ОРГАНИЗОВАН ДЛЯ ПОМОЩИ УЧЕНИКАМ В АВТОМАТИЗАЦИИ ЦДЗ.\n\n📢 КАНАЛ: @your_channel")
+    await message.answer("📡 О ПРОЕКТЕ\n\nЭтот бот организован для помощи ученикам в автоматизации ЦДЗ.\n\n📢 Канал: @your_channel")
 
 @dp.message(F.text == "💬 ПОДДЕРЖКА")
 async def support_main(message: types.Message, state: FSMContext):
-    await message.answer("💬 ЧАТ ПОДДЕРЖКИ\n\n🔗 ССЫЛКА: [ПЕРЕЙТИ В ЧАТ](https://t.me/your_support_chat)", parse_mode="Markdown")
+    await message.answer("💬 ЧАТ ПОДДЕРЖКИ\n\n🔗 Ссылка: [Перейти в чат](https://t.me/your_support_chat)", parse_mode="Markdown")
 
 # ─── CALLBACKS ───
 
