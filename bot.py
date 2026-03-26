@@ -558,41 +558,58 @@ async def speed_menu(call: types.CallbackQuery):
 @dp.callback_query(F.data.startswith("save_speed_"))
 async def save_speed(call: types.CallbackQuery):
     logger.info(f"Button clicked: {call.data}")
-    await call.answer()
     speed = int(call.data.replace("save_speed_", ""))
     db.update_user(call.from_user.id, solve_delay=speed)
+    await call.answer(f"✅ Установлено: {speed} мин")
+    
+    user = db.get_user(call.from_user.id)
     try:
-        await call.message.edit_reply_markup(reply_markup=get_speed_kb(speed))
-    except TelegramBadRequest:
-        pass
+        await call.message.edit_text(
+            "⏱ **Настройка времени всего решения**\n\n"
+            "Выберите желаемое общее время выполнения теста. Бот будет распределять паузы между вопросами.\n\n"
+            f"Текущий выбор: **{speed} мин**",
+            reply_markup=get_speed_kb(user.get('solve_delay', 15)),
+            parse_mode="Markdown"
+        )
+    except TelegramBadRequest: pass
 
 @dp.callback_query(F.data == "set_accuracy_menu")
 async def accuracy_menu(call: types.CallbackQuery):
     logger.info(f"Button clicked: {call.data}")
     await call.answer()
     user = db.get_user(call.from_user.id)
+    acc = user.get('accuracy_mode', 'advanced')
+    acc_text = {"modest": "70+%", "advanced": "80+%", "excellent": "90+%"}.get(acc, "80+%")
     try:
         await call.message.edit_text(
             "🎯 **Выбор режима точности**\n\n"
+            f"Текущий режим: **{acc_text}**\n\n"
             "Выберите желаемый процент правильных ответов. Чем выше точность, тем больше внимания системы может привлечь результат.\n\n"
-            "⚠️ **Важно:** Бот может ошибаться, мы не гарантируем 100% верных ответов в любом режиме.\n"
-            "Рекомендуется: **Стандарт (80+%)**",
-            reply_markup=get_accuracy_kb(user.get('accuracy_mode', 'advanced')),
+            "⚠️ **Важно:** Бот может ошибаться, мы не гарантируем 100% верных ответов.",
+            reply_markup=get_accuracy_kb(acc),
             parse_mode="Markdown"
         )
-    except TelegramBadRequest:
-        pass
+    except TelegramBadRequest: pass
 
 @dp.callback_query(F.data.startswith("save_acc_"))
 async def save_accuracy(call: types.CallbackQuery):
     logger.info(f"Button clicked: {call.data}")
-    await call.answer()
     mode = call.data.replace("save_acc_", "")
     db.update_user(call.from_user.id, accuracy_mode=mode)
+    await call.answer("✅ Точность обновлена")
+    
+    user = db.get_user(call.from_user.id)
+    acc_text = {"modest": "70+%", "advanced": "80+%", "excellent": "90+%"}.get(mode, "80+%")
     try:
-        await call.message.edit_reply_markup(reply_markup=get_accuracy_kb(mode))
-    except TelegramBadRequest:
-        pass
+        await call.message.edit_text(
+            "🎯 **Выбор режима точности**\n\n"
+            f"Текущий режим: **{acc_text}**\n\n"
+            "Выберите желаемый процент правильных ответов. Чем выше точность, тем больше внимания системы может привлечь результат.\n\n"
+            "⚠️ **Важно:** Бот может ошибаться, мы не гарантируем 100% верных ответов.",
+            reply_markup=get_accuracy_kb(user.get('accuracy_mode', 'advanced')),
+            parse_mode="Markdown"
+        )
+    except TelegramBadRequest: pass
 
 # Обработчик завершен (дубликат удален выше)
 
