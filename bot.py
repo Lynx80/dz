@@ -114,20 +114,28 @@ def get_settings_kb(solve_delay=15, accuracy_mode="excellent"):
     builder.adjust(1)
     return builder.as_markup()
 
-def get_speed_kb():
+def get_speed_kb(current_speed=15):
     builder = InlineKeyboardBuilder()
     speeds = [1, 5, 10, 15, 20, 25]
     for s in speeds:
-        builder.button(text=f"{s} мин", callback_data=f"save_speed_{s}")
+        text = f"✅ {s} мин" if s == current_speed else f"{s} мин"
+        if s == 15: text += " (По умолчанию)"
+        builder.button(text=text, callback_data=f"save_speed_{s}")
     builder.button(text="🔙 Назад", callback_data="back_to_settings")
-    builder.adjust(3, 3, 1)
+    builder.adjust(1)
     return builder.as_markup()
 
-def get_accuracy_kb():
+def get_accuracy_kb(current_acc="advanced"):
     builder = InlineKeyboardBuilder()
-    builder.button(text="🥉 Базовый (70+%)", callback_data="save_acc_modest")
-    builder.button(text="🥈 Стандарт (80+%)", callback_data="save_acc_advanced")
-    builder.button(text="🥇 Максимум (90+%)", callback_data="save_acc_excellent")
+    modes = [
+        ("modest", "🥉 Базовый (70+%)"),
+        ("advanced", "🥈 Стандарт (80+%)"),
+        ("excellent", "🥇 Максимум (90+%)")
+    ]
+    for m_id, m_text in modes:
+        text = f"✅ {m_text}" if m_id == current_acc else m_text
+        if m_id == "advanced": text += " (По умолчанию)"
+        builder.button(text=text, callback_data=f"save_acc_{m_id}")
     builder.button(text="🔙 Назад", callback_data="back_to_settings")
     builder.adjust(1)
     return builder.as_markup()
@@ -530,12 +538,13 @@ async def back_to_settings(call: types.CallbackQuery, state: FSMContext):
 @dp.callback_query(F.data == "set_speed_menu")
 async def speed_menu(call: types.CallbackQuery):
     await call.answer()
+    user = db.get_user(call.from_user.id)
     await call.message.edit_text(
         "⏱ **Настройка времени всего решения**\n\n"
         "Выберите желаемое общее время выполнения теста. "
         "Бот будет распределять паузы между вопросами так, чтобы уложиться в это время.\n\n"
         "По умолчанию: **15 минут**",
-        reply_markup=get_speed_kb(),
+        reply_markup=get_speed_kb(user.get('solve_delay', 15)),
         parse_mode="Markdown"
     )
 
@@ -544,21 +553,18 @@ async def save_speed(call: types.CallbackQuery):
     await call.answer()
     speed = int(call.data.replace("save_speed_", ""))
     db.update_user(call.from_user.id, solve_delay=speed)
-    user = db.get_user(call.from_user.id)
-    await call.message.edit_text(
-        "⚙️ **Настройки бота:**",
-        reply_markup=get_settings_kb(user.get('solve_delay'), user.get('accuracy_mode')),
-        parse_mode="Markdown"
-    )
+    await call.message.edit_reply_markup(reply_markup=get_speed_kb(speed))
 
 @dp.callback_query(F.data == "set_accuracy_menu")
 async def accuracy_menu(call: types.CallbackQuery):
     await call.answer()
+    user = db.get_user(call.from_user.id)
     await call.message.edit_text(
         "🎯 **Выбор режима точности**\n\n"
         "Выберите желаемый процент правильных ответов. Чем выше точность, тем больше внимания системы может привлечь результат.\n\n"
-        "⚠️ **Важно:** Бот может ошибаться, мы не гарантируем 100% верных ответов в любом режиме.",
-        reply_markup=get_accuracy_kb(),
+        "⚠️ **Важно:** Бот может ошибаться, мы не гарантируем 100% верных ответов в любом режиме.\n"
+        "Рекомендуется: **Стандарт (80+%)**",
+        reply_markup=get_accuracy_kb(user.get('accuracy_mode', 'advanced')),
         parse_mode="Markdown"
     )
 
@@ -567,12 +573,7 @@ async def save_accuracy(call: types.CallbackQuery):
     await call.answer()
     mode = call.data.replace("save_acc_", "")
     db.update_user(call.from_user.id, accuracy_mode=mode)
-    user = db.get_user(call.from_user.id)
-    await call.message.edit_text(
-        "⚙️ **Настройки бота:**",
-        reply_markup=get_settings_kb(user.get('solve_delay'), user.get('accuracy_mode')),
-        parse_mode="Markdown"
-    )
+    await call.message.edit_reply_markup(reply_markup=get_accuracy_kb(mode))
 
 # Обработчик завершен (дубликат удален выше)
 
