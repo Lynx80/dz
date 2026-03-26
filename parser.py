@@ -88,6 +88,7 @@ class ParserService:
         Получает профиль через API.
         Оптимизация: пробуем сначала получить профиль напрямую (быстрее), 
         если 401 - делаем рукопожатие и пробуем снова.
+        Если и это не помогло, пытаемся достать данные из результата рукопожатия.
         """
         headers = self.base_headers.copy()
         headers['Authorization'] = f'Bearer {access_token}'
@@ -106,17 +107,30 @@ class ParserService:
                         children = data.get('children', [])
                         if children: return self._parse_profile(children[0])
                         
-                # Попытка 2: Рукопожатие (если первый путь не прошел или 401)
+                # Попытка 2: Рукопожатие
                 logger.info("Direct fetch failed or session inactive, starting handshake...")
-                await self._activate_session(access_token)
+                activation = await self._activate_session(access_token)
                 
+                # Пробуем API профиля еще раз после активации
                 async with session.get("https://authedu.mosreg.ru/api/family/mobile/v1/profile", headers=headers, timeout=10) as resp:
                     if resp.status == 200:
                         data = await resp.json()
                         children = data.get('children', [])
                         if children: return self._parse_profile(children[0])
-                    elif resp.status == 401:
-                        raise MosregAuthError("Токен истек")
+                    
+                # Шаг 3: Если API профиля все еще 401/пусто, используем данные из активации (для аккаунтов УЧЕНИКА)
+                if activation and isinstance(activation, list):
+                    for p in activation:
+                        if p.get('type') == 'StudentProfile' or p.get('type') == 'Learner':
+                            logger.info(f"Found StudentProfile in activation: {p}")
+                            return {
+                                "first_name": p.get('first_name') or p.get('firstname') or 'Ученик',
+                                "last_name": p.get('last_name') or p.get('lastname') or '',
+                                "grade": "",
+                                "student_id": str(p.get('id') or p.get('person_id') or '')
+                            }
+                
+                raise MosregAuthError("Не удалось получить профиль")
             except MosregAuthError:
                 raise
             except Exception as e:
