@@ -320,11 +320,13 @@ class ParserService:
                     acc_mode = user.get('accuracy_mode', 'excellent')
                     import random
                     chance = random.random()
-                    target_reached = False
-                    if acc_mode == 'modest' and chance > 0.8: # 20% шанс ошибки
+                    if acc_mode == 'modest' and chance > 0.7: # 30% шанс ошибки (~70% точность)
                         wrong_indices = [i for i in range(len(options_elements)) if i != idx]
                         if wrong_indices: idx = random.choice(wrong_indices)
-                    elif acc_mode == 'advanced' and chance > 0.9: # 10% шанс ошибки
+                    elif acc_mode == 'advanced' and chance > 0.8: # 20% шанс ошибки (~80% точность)
+                        wrong_indices = [i for i in range(len(options_elements)) if i != idx]
+                        if wrong_indices: idx = random.choice(wrong_indices)
+                    elif acc_mode == 'excellent' and chance > 0.9: # 10% шанс ошибки (~90% точность)
                         wrong_indices = [i for i in range(len(options_elements)) if i != idx]
                         if wrong_indices: idx = random.choice(wrong_indices)
 
@@ -437,10 +439,13 @@ class ParserService:
                     acc_mode = user.get('accuracy_mode', 'excellent')
                     import random
                     chance = random.random()
-                    if acc_mode == 'modest' and chance > 0.8: # 20% шанс ошибки
+                    if acc_mode == 'modest' and chance > 0.7: # ~70% точность
                         wrong_indices = [i for i in range(len(options_elements)) if i != idx]
                         if wrong_indices: idx = random.choice(wrong_indices)
-                    elif acc_mode == 'advanced' and chance > 0.9: # 10% шанс ошибки
+                    elif acc_mode == 'advanced' and chance > 0.8: # ~80% точность
+                        wrong_indices = [i for i in range(len(options_elements)) if i != idx]
+                        if wrong_indices: idx = random.choice(wrong_indices)
+                    elif acc_mode == 'excellent' and chance > 0.9: # ~90% точность
                         wrong_indices = [i for i in range(len(options_elements)) if i != idx]
                         if wrong_indices: idx = random.choice(wrong_indices)
 
