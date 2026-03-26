@@ -12,6 +12,10 @@ from database import Database
 
 logger = logging.getLogger(__name__)
 
+class MosregAuthError(Exception):
+    """Исключение при ошибке авторизации (401)."""
+    pass
+
 class ParserService:
     def __init__(self):
         self.ai = AIService()
@@ -185,8 +189,12 @@ class ParserService:
                             schedule = await self.get_mosreg_schedule_v3(access_token, student_id, date_str)
                             
                         return schedule
+                    elif resp.status == 401:
+                        raise MosregAuthError("Токен истек")
                     else:
                         logger.error(f"Schedule API error: {resp.status} - {await resp.text()}")
+            except MosregAuthError:
+                raise
             except Exception as e:
                 logger.error(f"Schedule error: {e}")
         return await self.get_mosreg_schedule_v3(access_token, student_id, date_str)
@@ -206,7 +214,6 @@ class ParserService:
                         items = data.get('data', {}).get('items', [])
                         schedule = []
                         for item in items:
-                            # В v3 структе может быть по-другому
                             schedule.append({
                                 "subject": item.get('subject_name') or item.get('name', 'Урок'),
                                 "time": f"{item.get('start_time', '')} - {item.get('end_time', '')}",
@@ -214,11 +221,47 @@ class ParserService:
                                 "has_hw": bool(item.get('homework'))
                             })
                         return schedule
+                    elif resp.status == 401:
+                        raise MosregAuthError("Токен истек")
+            except MosregAuthError:
+                raise
             except Exception as e:
                 logger.error(f"Schedule V3 error: {e}")
         return []
 
     async def get_mosreg_homework(self, access_token, student_id, date_str=None):
+        """Получает список ЦДЗ заданий."""
+        if not student_id: return []
+        if not date_str: date_str = datetime.now().strftime('%Y-%m-%d')
+        
+        url = f"https://authedu.mosreg.ru/api/family/mobile/v1/homeworks?student_id={student_id}&from={date_str}&to={date_str}"
+        headers = self.base_headers.copy()
+        headers['Authorization'] = f'Bearer {access_token}'
+        headers['auth-token'] = access_token
+        
+        async with aiohttp.ClientSession() as session:
+            try:
+                async with session.get(url, headers=headers, timeout=15) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        hws = []
+                        for item in data:
+                            # Парсим только ЦДЗ
+                            desc = item.get('description', '').lower()
+                            if 'цдз' in desc or 'тест' in desc or 'выполнить' in desc:
+                                hws.append({
+                                    "subject": item.get('subject_name', ''),
+                                    "description": item.get('description', ''),
+                                    "link": self._extract_url(item.get('description', ''))
+                                })
+                        return hws
+                    elif resp.status == 401:
+                        raise MosregAuthError("Токен истек")
+            except MosregAuthError:
+                raise
+            except Exception as e:
+                logger.error(f"Homework error: {e}")
+        return []
         """
         Получает ЦДЗ через eventcalendar API с улучшенной фильтрацией.
         """
