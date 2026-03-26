@@ -86,7 +86,7 @@ class ParserService:
     async def fetch_mosreg_profile(self, access_token):
         """
         Получает профиль через API.
-        Оптимизировано: пробуем сразу запросить профиль, если 403 - делаем активацию.
+        Оптимизировано: пробуем сразу запросить профиль, если 401/403 - делаем активацию.
         """
         profile_url = "https://authedu.mosreg.ru/api/family/mobile/v1/profile"
         headers = self.base_headers.copy()
@@ -114,6 +114,12 @@ class ParserService:
                                     children = data.get('children', [])
                                     if children:
                                         return self._parse_profile(children[0])
+                        
+                        if resp.status == 401:
+                            raise MosregAuthError("Токен истек")
+                            
+            except MosregAuthError:
+                raise
             except Exception as e:
                 logger.error(f"Fetch profile error: {e}")
         return None
@@ -125,24 +131,6 @@ class ParserService:
             "grade": str(child_data.get('class_name') or ''),
             "student_id": str(child_data.get('id', ''))
         }
-                    elif resp.status == 401:
-                        new_token = await self.refresh_token(access_token)
-                        if new_token: return await self.fetch_mosreg_profile(new_token)
-            except Exception as e:
-                logger.error(f"Fetch profile error: {e}")
-
-        # Fallback: пробуем достать хоть что-то из активации
-        if activation and isinstance(activation, list) and len(activation) > 0:
-            p = activation[0]
-            user_info = p.get('user', {})
-            return {
-                "first_name": p.get('first_name') or user_info.get('first_name') or 'Ученик',
-                "last_name": p.get('last_name') or user_info.get('last_name') or '',
-                "grade": str(p.get('class_name') or ''),
-                "student_id": str(p.get('id') or p.get('person_id', ''))
-            }
-        
-        return None
 
     async def get_mosreg_schedule(self, access_token, student_id, date_str=None):
         """
