@@ -50,7 +50,7 @@ class ParserService:
         async with aiohttp.ClientSession() as session:
             try:
                 async with session.get(url, headers=headers, timeout=15) as resp:
-                    if resp.status == 200:
+                    if resp.status in [200, 201]:
                         new_token = await resp.text()
                         new_token = new_token.strip().strip('"')
                         if new_token.startswith('eyJ'):
