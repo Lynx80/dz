@@ -160,15 +160,13 @@ class ParserService:
 
     async def get_mosreg_homework(self, access_token, student_id, date_str=None):
         """
-        Получает ЦДЗ через eventcalendar API.
+        Получает ЦДЗ через eventcalendar API с улучшенной фильтрацией.
         """
         if not student_id: return []
         if not date_str: date_str = datetime.now().strftime('%Y-%m-%d')
-        begin_date = date_str
-        end_date = date_str # Для одного дня берем ту же дату
         
         url = (f"https://authedu.mosreg.ru/api/eventcalendar/v1/api/events"
-               f"?person_ids={student_id}&begin_date={begin_date}&end_date={end_date}&expand=homework")
+               f"?person_ids={student_id}&begin_date={date_str}&end_date={date_str}&expand=homework")
         headers = self.base_headers.copy()
         headers['Authorization'] = f'Bearer {access_token}'
         
@@ -179,28 +177,52 @@ class ParserService:
                         data = await resp.json()
                         homeworks = []
                         events = data.get('response', [])
+                        
+                        # Ключевые слова для поиска ЦДЗ в тексте
+                        kw_pattern = r"(тест|цдз|выполнить|решить|интерактив|олимпиада)"
+                        
                         for event in events:
                             subject = event.get('subject_name') or event.get('title', 'Без предмета')
                             hw_list = event.get('homework', [])
                             if not isinstance(hw_list, list): hw_list = [hw_list] if hw_list else []
                             
                             for hw in hw_list:
-                                desc = hw.get('description', '') or hw.get('text', '')
+                                desc = (hw.get('description', '') or hw.get('text', '')).lower()
                                 link = None
+                                
+                                # Пытаемся найти ссылку в материалах
                                 materials = hw.get('materials', [])
                                 for m in materials:
                                     for item in m.get('items', []):
-                                        if item.get('link'): link = item.get('link'); break
+                                        curr_link = item.get('link')
+                                        if curr_link: link = curr_link; break
                                     if link: break
                                     
+                                # Если ссылки нет в материалах, ищем в тексте описания
                                 if not link:
                                     urls = re.findall(r'https?://[^\s<>"]+', desc)
                                     if urls: link = urls[0]
                                     
-                                if desc or link:
+                                # Решаем: является ли это ЦДЗ
+                                is_cdz = False
+                                if link:
+                                    # Ссылка на знакомый ресурс - точно ЦДЗ
+                                    if any(x in link for x in ["mesh.mos.ru", "school.mos.ru", "videouroki.net", "uchi.ru"]):
+                                        is_cdz = True
+                                    # Или в описании есть метки, а ссылка любая другая
+                                    elif re.search(kw_pattern, desc):
+                                        is_cdz = True
+                                elif re.search(kw_pattern, desc):
+                                    # Даже если ссылки нет, но слова "тест" или "цдз" есть - возможно это ЦДЗ (хотя бот его не решит)
+                                    # Но мы пометим для счетчика
+                                    is_cdz = True
+                                    
+                                if is_cdz:
                                     homeworks.append({
-                                        "subject": subject, "description": desc,
-                                        "date": event.get('start_at', date_str)[:10], "link": link
+                                        "subject": subject, 
+                                        "description": hw.get('description', ''), 
+                                        "date": event.get('start_at', date_str)[:10], 
+                                        "link": link
                                     })
                         return homeworks
             except Exception as e:
