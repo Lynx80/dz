@@ -86,8 +86,12 @@ class ParserService:
     async def fetch_mosreg_profile(self, access_token):
         """
         Получает профиль через API.
-        Оптимизировано: пробуем сразу запросить профиль, если 401/403 - делаем активацию.
+        Активация сессии (handshake) обязательна для работы других API.
         """
+        # Шаг 1: Активация сессии
+        await self._activate_session(access_token)
+        
+        # Шаг 2: Запрос профиля
         profile_url = "https://authedu.mosreg.ru/api/family/mobile/v1/profile"
         headers = self.base_headers.copy()
         headers['Authorization'] = f'Bearer {access_token}'
@@ -95,29 +99,14 @@ class ParserService:
         
         async with aiohttp.ClientSession() as session:
             try:
-                # 1. Пробуем сразу получить профиль
                 async with session.get(profile_url, headers=headers, timeout=10) as resp:
                     if resp.status == 200:
                         data = await resp.json()
                         children = data.get('children', [])
                         if children:
                             return self._parse_profile(children[0])
-                    
-                    # 2. Если не 200 (например 403), пробуем активацию
-                    if resp.status in [401, 403]:
-                        activation = await self._activate_session(access_token)
-                        if activation:
-                            # Пробуем еще раз после активации
-                            async with session.get(profile_url, headers=headers, timeout=10) as resp2:
-                                if resp2.status == 200:
-                                    data = await resp2.json()
-                                    children = data.get('children', [])
-                                    if children:
-                                        return self._parse_profile(children[0])
-                        
-                        if resp.status == 401:
-                            raise MosregAuthError("Токен истек")
-                            
+                    elif resp.status == 401:
+                        raise MosregAuthError("Токен истек")
             except MosregAuthError:
                 raise
             except Exception as e:
