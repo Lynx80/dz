@@ -401,9 +401,9 @@ async def refresh_user_data(call: types.CallbackQuery):
     user = db.get_user(call.from_user.id)
     if not user.get('token_mos'): return await call.answer("⚠️ НУЖЕН ТОКЕН!", show_alert=True)
     await call.answer("⏳ ОБНОВЛЯЮ...")
-    profile = await parser.get_mosreg_profile(user['token_mos'])
+    profile = await parser.fetch_mosreg_profile(user['token_mos'])
     if profile:
-        db.update_user(call.from_user.id, grade=profile['grade'], student_id=profile['student_id'])
+        db.update_user(call.from_user.id, first_name=profile['first_name'], grade=profile.get('grade', ''), student_id=profile['student_id'])
         await call.message.answer("✅ ДАННЫЕ ОБНОВЛЕНЫ!")
     else: await call.answer("❌ ОШИБКА ОБНОВЛЕНИЯ", show_alert=True)
 
