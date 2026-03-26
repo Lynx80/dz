@@ -70,9 +70,9 @@ def get_main_menu_kb():
 
 def get_week_kb(prefix="week"):
     builder = InlineKeyboardBuilder()
-    builder.button(text="⬅️ Предыдущая", callback_data=f"{prefix}_prev")
-    builder.button(text="📅 Текущая", callback_data=f"{prefix}_curr")
-    builder.button(text="🔙 Назад", callback_data="back_to_main")
+    builder.button(text="📅 ПРЕДЫДУЩАЯ", callback_data=f"{prefix}_prev")
+    builder.button(text="📅 ТЕКУЩАЯ", callback_data=f"{prefix}_curr")
+    builder.button(text="🔙 НАЗАД", callback_data="back_to_main")
     builder.adjust(2, 1)
     return builder.as_markup()
 
@@ -206,7 +206,7 @@ async def my_hw_start(message: types.Message, state: FSMContext):
     user = db.get_user(message.from_user.id)
     if not await check_token(message, user): return
     
-    await message.answer("📅 **Выберите неделю:**", reply_markup=get_week_kb(prefix="manual"))
+    await message.answer("📅 ВЫБЕРИТЕ НЕДЕЛЮ:", reply_markup=get_week_kb(prefix="manual"))
     await state.set_state(BotStates.WEEK_SELECTION)
 
 @dp.message(F.text == "⚡ Авто решение")
@@ -214,7 +214,7 @@ async def auto_solve_start(message: types.Message, state: FSMContext):
     user = db.get_user(message.from_user.id)
     if not await check_token(message, user): return
     
-    await message.answer("🚀 **Авто-режим: Выберите неделю:**", reply_markup=get_week_kb(prefix="auto"))
+    await message.answer("🚀 АВТО-РЕЖИМ: ВЫБЕРИТЕ НЕДЕЛЮ:", reply_markup=get_week_kb(prefix="auto"))
     await state.set_state(BotStates.AUTO_SOLVE_WEEK)
 
 @dp.message(F.text == "👤 Профиль")
@@ -280,9 +280,9 @@ async def back_to_main(call: types.CallbackQuery, state: FSMContext):
     await state.set_state(BotStates.MAIN_MENU)
     # Пытаемся отредактировать сообщение или отправить новое если это из 'check_token'
     try:
-        await call.message.edit_text("🏠 **Главное меню:**", reply_markup=get_main_menu_kb(), parse_mode="Markdown")
+        await call.message.edit_text("🏠 ГЛАВНОЕ МЕНЮ:", reply_markup=get_main_menu_kb(), parse_mode="Markdown")
     except:
-        await call.message.answer("🏠 **Главное меню:**", reply_markup=get_main_menu_kb(), parse_mode="Markdown")
+        await call.message.answer("🏠 ГЛАВНОЕ МЕНЮ:", reply_markup=get_main_menu_kb(), parse_mode="Markdown")
 
 # Выбор недели (Ручной / Авто)
 @dp.callback_query(StateFilter(BotStates.WEEK_SELECTION, BotStates.AUTO_SOLVE_WEEK), F.data.contains("_prev") | F.data.contains("_curr"))
@@ -292,7 +292,7 @@ async def week_select(call: types.CallbackQuery, state: FSMContext):
     await state.update_data(week_offset=offset)
     next_state = BotStates.DAY_SELECTION if prefix == "manual" else BotStates.AUTO_SOLVE_DAY
     await state.set_state(next_state)
-    await call.message.edit_text("📅 **Выберите день:**", reply_markup=get_days_kb(offset, prefix=prefix), parse_mode="Markdown")
+    await call.message.edit_text("📅 ВЫБЕРИТЕ ДЕНЬ:", reply_markup=get_days_kb(offset, prefix=prefix), parse_mode="Markdown")
 
 # Выбор дня -> Мои ЦДЗ (Ручной)
 @dp.callback_query(BotStates.DAY_SELECTION, F.data.startswith("manual_"))
