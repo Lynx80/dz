@@ -85,11 +85,30 @@ class ParserService:
 
     async def fetch_mosreg_profile(self, access_token):
         """
-        Получает профиль через API.
-        Оптимизация: пробуем сначала получить профиль напрямую (быстрее), 
-        если 401 - делаем рукопожатие и пробуем снова.
-        Если и это не помогло, пытаемся достать данные из результата рукопожатия.
+        Получает профиль через API и токен.
+        Приоритет: 
+        1. Имя из самого токена (JWT) - надежнее всего.
+        2. Прямой запрос к API профиля.
+        3. Рукопожатие и повторный запрос.
+        4. Экстракция из данных активации.
         """
+        user_info = {"first_name": "", "last_name": "", "grade": "", "student_id": ""}
+        
+        # Шаг 1: Декодируем JWT для получения имени (быстро и надежно)
+        try:
+            import base64
+            parts = access_token.split('.')
+            if len(parts) == 3:
+                payload = parts[1]
+                payload += '=' * (-len(payload) % 4)
+                decoded = json.loads(base64.b64decode(payload).decode('utf-8'))
+                if 'name' in decoded:
+                    user_info["first_name"] = decoded['name'].split()[0]
+                    user_info["student_id"] = str(decoded.get('sub', ''))
+                    logger.info(f"Extracted name from JWT: {user_info['first_name']}")
+        except Exception as e:
+            logger.warning(f"JWT decode error: {e}")
+
         headers = self.base_headers.copy()
         headers['Authorization'] = f'Bearer {access_token}'
         headers['auth-token'] = access_token
@@ -99,73 +118,51 @@ class ParserService:
         
         async with aiohttp.ClientSession() as session:
             try:
-                # Попытка 1: Напрямую (быстрый путь)
+                # Шаг 2: Пробуем API профиля (для получения класса и фамилии)
                 async with session.get("https://authedu.mosreg.ru/api/family/mobile/v1/profile", headers=headers, timeout=5) as resp:
                     if resp.status == 200:
                         data = await resp.json()
-                        logger.info("Fast profile fetch successful")
                         children = data.get('children', [])
-                        if children: return self._parse_profile(children[0])
-                        
-                # Попытка 2: Рукопожатие
-                logger.info("Direct fetch failed or session inactive, starting handshake...")
+                        if children:
+                            p = self._parse_profile(children[0])
+                            user_info.update({k: v for k, v in p.items() if v})
+                            return user_info
+
+                # Шаг 3: Рукопожатие и активация
                 activation = await self._activate_session(access_token)
                 
-                # Пробуем API профиля еще раз после активации
-                async with session.get("https://authedu.mosreg.ru/api/family/mobile/v1/profile", headers=headers, timeout=10) as resp:
-                    if resp.status == 200:
-                        data = await resp.json()
-                        children = data.get('children', [])
-                        if children: return self._parse_profile(children[0])
-                    
-                # Шаг 3: Пробовали family, если не вышло — пробуем мобильный (для УЧЕНИКОВ)
-                headers['X-Mes-Subsystem'] = 'mobile'
+                # Повторный запрос после активации
                 async with session.get("https://authedu.mosreg.ru/api/family/mobile/v1/profile", headers=headers, timeout=5) as resp:
                     if resp.status == 200:
                         data = await resp.json()
                         children = data.get('children', [])
-                        if children: return self._parse_profile(children[0])
+                        if children:
+                            p = self._parse_profile(children[0])
+                            user_info.update({k: v for k, v in p.items() if v})
+                            return user_info
 
-                # Шаг 4: Пробуем API пользователей напрямую
+                # Шаг 4: Если API профиля недоступно, берем из /users/profile
                 async with session.get("https://myschool.mosreg.ru/acl/api/users/profile", headers=headers, timeout=5) as resp:
                     if resp.status == 200:
                         p = await resp.json()
-                        logger.info(f"Got profile from /users/profile: {p}")
-                        return {
-                            "first_name": p.get('first_name') or p.get('firstname') or 'Пользователь',
-                            "last_name": p.get('last_name') or p.get('lastname') or '',
-                            "grade": "",
-                            "student_id": str(p.get('id') or p.get('person_id') or '')
-                        }
-
-                # Шаг 5: Если совсем глухо, используем данные из активации
-                if activation and isinstance(activation, list):
+                        user_info["first_name"] = user_info["first_name"] or p.get('first_name') or p.get('firstname')
+                        user_info["last_name"] = user_info["last_name"] or p.get('last_name') or p.get('lastname')
+                        user_info["student_id"] = user_info["student_id"] or str(p.get('id') or p.get('person_id') or '')
+                
+                # Шаг 5: Использование данных из активации (если все еще нет ID)
+                if not user_info["student_id"] and activation and isinstance(activation, list):
                     for p in activation:
                         if p.get('type') in ['StudentProfile', 'Learner', 'Profile']:
-                            logger.info(f"Using activation profile fallback: {p}")
-                            # Пытаемся добыть имя из разных полей
-                            fname = p.get('first_name') or p.get('firstname') or p.get('middle_name') or 'Пользователь'
-                            lname = p.get('last_name') or p.get('lastname') or ''
-                            
-                            return {
-                                "first_name": fname,
-                                "last_name": lname,
-                                "grade": "",
-                                "student_id": str(p.get('id') or p.get('person_id') or '')
-                            }
+                            user_info["first_name"] = user_info["first_name"] or p.get('first_name') or p.get('firstname')
+                            user_info["student_id"] = str(p.get('id') or p.get('person_id') or '')
                 
-                # Шаг 6: Последний шанс — декодируем JWT
-                try:
-                    import base64
-                    parts = access_token.split('.')
-                    if len(parts) == 3:
-                        payload = parts[1]
-                        payload += '=' * (-len(payload) % 4)
-                        decoded = json.loads(base64.b64decode(payload).decode('utf-8'))
-                        if 'name' in decoded:
-                            return {"first_name": decoded['name'].split()[0], "last_name": "", "grade": "", "student_id": decoded.get('sub', '')}
-                except: pass
-
+                # Финальная проверка: если имя так и не найдено
+                if not user_info["first_name"]:
+                    user_info["first_name"] = "Пользователь"
+                
+                if user_info["student_id"]:
+                    return user_info
+                
                 raise MosregAuthError("Не удалось получить профиль")
             except MosregAuthError:
                 raise
