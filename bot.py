@@ -170,9 +170,9 @@ async def check_token(message: types.Message, user):
             "Для МО обязательно сначала войти в аккаунт, а потом получить токен!"
         )
         if isinstance(message, types.CallbackQuery):
-            await message.message.answer(help_text, reply_markup=get_token_help_kb(), disable_web_page_preview=True)
+            await message.message.answer(help_text, reply_markup=get_token_help_kb(), disable_web_page_preview=True, parse_mode="Markdown")
         else:
-            await message.answer(help_text, reply_markup=get_token_help_kb(), disable_web_page_preview=True)
+            await message.answer(help_text, reply_markup=get_token_help_kb(), disable_web_page_preview=True, parse_mode="Markdown")
         return False
     return True
 
