@@ -87,12 +87,19 @@ def get_days_kb(week_offset=0, prefix="day"):
 
 def get_hw_action_kb(date_str, prefix="manual"):
     builder = InlineKeyboardBuilder()
-    builder.button(text="🎯 РЕШАТЬ ВСЕ (ТОЧНО)", callback_data=f"batch_solve_{date_str}_excellent")
-    builder.button(text="⚡ РЕШАТЬ ВСЕ (БЫСТРО)", callback_data=f"batch_solve_{date_str}_modest")
+    builder.button(text="🎯 РЕШАТЬ ВСЕ ЦДЗ ЗА СЕГОДНЯ", callback_data=f"batch_solve_pre_{date_str}")
     builder.button(text="🔍 РЕШАТЬ ВЫБОРОЧНО", callback_data=f"selective_solve_{date_str}")
     builder.button(text="🔄 ОБНОВИТЬ", callback_data=f"refresh_day_{date_str}_{prefix}")
     builder.button(text="🔙 НАЗАД", callback_data="back_to_days")
-    builder.adjust(1, 1, 1, 2)
+    builder.adjust(1, 1, 2)
+    return builder.as_markup()
+
+def get_batch_solve_pre_kb(date_str):
+    builder = InlineKeyboardBuilder()
+    builder.button(text="🎯 ТОЧНО (90+%)", callback_data=f"batch_solve_{date_str}_excellent")
+    builder.button(text="⚡ БЫСТРО (70+%)", callback_data=f"batch_solve_{date_str}_modest")
+    builder.button(text="🔙 НАЗАД", callback_data=f"refresh_day_{date_str}_manual")
+    builder.adjust(2, 1)
     return builder.as_markup()
 
 def get_settings_kb(solve_delay=15, accuracy_mode="advanced"):
@@ -242,20 +249,46 @@ async def week_select(call: types.CallbackQuery, state: FSMContext):
 @dp.callback_query(F.data.startswith("manual_"))
 @dp.callback_query(F.data.startswith("refresh_day_"))
 async def manual_day_select(call: types.CallbackQuery, state: FSMContext):
-    date_str = call.data.split("_")[2] if "refresh" in call.data else call.data.split("_")[1]
+    if "refresh" in call.data:
+        parts = call.data.split("_")
+        date_str = parts[2]
+    else:
+        date_str = call.data.split("_")[1]
+        
     await state.update_data(selected_date=date_str)
     user = db.get_user(call.from_user.id)
     
+    # 1. Получаем данные
     schedule = await parser.get_mosreg_schedule(user['token_mos'], user['student_id'], date_str)
     homeworks = await parser.get_mosreg_homework(user['token_mos'], user['student_id'], date_str)
     
-    text = f"📍 РАСПИСАНИЕ НА {date_str}:\n🗓️ ЗАДАНО ЦДЗ: {len(homeworks)}\n\n"
-    if not schedule: text += "💨 УРОКОВ НЕ НАЙДЕНО."
+    text = f"📍 РАСПИСАНИЕ НА {date_str}:\n🗓️ ЗАДАНО ЦДЗ: {len(homeworks)}\n━━━━━━━━━━━━━━━\n\n"
+    
+    if not schedule:
+        text += "💨 УРОКОВ НЕ НАЙДЕНО."
     else:
-        for item in schedule:
-            text += f"{'📝' if item['has_hw'] else '➖'} {item['time']} | {item['subject']}\n"
+        for i, item in enumerate(schedule, 1):
+            room = f"КАБ. № {item['room']}" if item['room'] else "КАБ. НЕ УКАЗАН"
+            text += f"{i} УРОК {item['time']} {room}\n"
+            text += f"{item['subject'].upper()}\n"
+            
+            # Ищем домашку для этого предмета
+            hw_item = next((h for h in homeworks if h['subject'].lower() in item['subject'].lower() or item['subject'].lower() in h['subject'].lower()), None)
+            if hw_item:
+                text += "📝 ДОМАШНЕЕ ЗАДАНИЕ (ЦДЗ):\n"
+                desc = hw_item['description'][:100] + "..." if len(hw_item['description']) > 100 else hw_item['description']
+                text += f"   ┗ {desc.upper()}\n"
+            else:
+                text += "📝 ДОМАШНЕЕ ЗАДАНИЕ:\n"
+                text += "   ┗ БЕЗ Д/З\n"
+            text += "━━━━━━━━━━━━━━━\n"
     
     await call.message.edit_text(text, reply_markup=get_hw_action_kb(date_str))
+
+@dp.callback_query(F.data.startswith("batch_solve_pre_"))
+async def batch_solve_pre_handler(call: types.CallbackQuery):
+    date_str = call.data.replace("batch_solve_pre_", "")
+    await call.message.edit_text(f"🚀 ВЫБЕРИТЕ РЕЖИМ РЕШЕНИЯ ДЛЯ {date_str}:", reply_markup=get_batch_solve_pre_kb(date_str))
 
 @dp.callback_query(F.data.startswith("batch_solve_"))
 async def batch_solve_handler(call: types.CallbackQuery, state: FSMContext):
