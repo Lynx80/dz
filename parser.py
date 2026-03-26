@@ -86,15 +86,9 @@ class ParserService:
     async def fetch_mosreg_profile(self, access_token):
         """
         Получает профиль через API.
-        Активация сессии (handshake) обязательна для работы других API.
+        Оптимизация: пробуем сначала получить профиль напрямую (быстрее), 
+        если 401 - делаем рукопожатие и пробуем снова.
         """
-        # Шаг 1: Активация сессии
-        activation = await self._activate_session(access_token)
-        if activation:
-            logger.info(f"Activation successful: {str(activation)[:1000]}")
-        
-        # Шаг 2: Запрос профиля
-        profile_url = "https://authedu.mosreg.ru/api/family/mobile/v1/profile"
         headers = self.base_headers.copy()
         headers['Authorization'] = f'Bearer {access_token}'
         headers['auth-token'] = access_token
@@ -104,14 +98,23 @@ class ParserService:
         
         async with aiohttp.ClientSession() as session:
             try:
-                async with session.get(profile_url, headers=headers, timeout=10) as resp:
-                    logger.info(f"Profile API status: {resp.status}")
+                # Попытка 1: Напрямую (быстрый путь)
+                async with session.get("https://authedu.mosreg.ru/api/family/mobile/v1/profile", headers=headers, timeout=5) as resp:
                     if resp.status == 200:
                         data = await resp.json()
-                        logger.info(f"Full profile data: {json.dumps(data, ensure_ascii=False)}")
+                        logger.info("Fast profile fetch successful")
                         children = data.get('children', [])
-                        if children:
-                            return self._parse_profile(children[0])
+                        if children: return self._parse_profile(children[0])
+                        
+                # Попытка 2: Рукопожатие (если первый путь не прошел или 401)
+                logger.info("Direct fetch failed or session inactive, starting handshake...")
+                await self._activate_session(access_token)
+                
+                async with session.get("https://authedu.mosreg.ru/api/family/mobile/v1/profile", headers=headers, timeout=10) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        children = data.get('children', [])
+                        if children: return self._parse_profile(children[0])
                     elif resp.status == 401:
                         raise MosregAuthError("Токен истек")
             except MosregAuthError:
