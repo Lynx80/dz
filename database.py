@@ -1,5 +1,6 @@
 import sqlite3
 import logging
+import json
 
 logger = logging.getLogger(__name__)
 
@@ -23,9 +24,10 @@ class Database:
                     grade TEXT,
                     token_mos TEXT,
                     student_id TEXT,
+                    mesh_id TEXT,
                     tests_solved INTEGER DEFAULT 0,
                     avg_score REAL DEFAULT 0,
-                    mode TEXT DEFAULT 'fast', -- eco, fast, precise
+                    mode TEXT DEFAULT 'fast',
                     api_limits INTEGER DEFAULT 100,
                     auto_solve INTEGER DEFAULT 0,
                     cache_enabled INTEGER DEFAULT 1,
@@ -35,6 +37,16 @@ class Database:
                     accuracy_mode TEXT DEFAULT 'advanced'
                 )
             """)
+            
+            # Миграция: Добавляем mesh_id если его нет
+            cursor.execute("PRAGMA table_info(users)")
+            columns = [column[1] for column in cursor.fetchall()]
+            if 'mesh_id' not in columns:
+                cursor.execute("ALTER TABLE users ADD COLUMN mesh_id TEXT")
+                logger.info("Database migration: added mesh_id column to users table")
+            
+            # Таблица кеша ответов ИИ
+            # ...
             # Таблица кеша ответов ИИ (для экономии токенов)
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS ai_cache (
@@ -70,13 +82,13 @@ class Database:
                 return dict(zip(columns, row))
             return None
 
-    def create_user(self, user_id, first_name=None, last_name=None, grade=None, student_id=None):
+    def create_user(self, user_id, first_name=None, last_name=None, grade=None, student_id=None, mesh_id=None):
         with self._get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("""
-                INSERT OR IGNORE INTO users (user_id, first_name, last_name, grade, student_id, solve_delay, accuracy_mode)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-            """, (user_id, first_name, last_name, grade, student_id, 15, 'advanced'))
+                INSERT OR IGNORE INTO users (user_id, first_name, last_name, grade, student_id, mesh_id, solve_delay, accuracy_mode)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """, (user_id, first_name, last_name, grade, student_id, mesh_id, 15, 'advanced'))
             conn.commit()
 
     def update_user(self, user_id, **kwargs):
@@ -167,7 +179,11 @@ class Database:
                 WHERE user_id = ?
             """, (new_avg, user_id))
             
-            self.add_stats(user_id, "Тест", "auto_solve", success=1, tokens_saved=500)
+            # Вставляем статистику напрямую, чтобы избежать вложенного соединения
+            cursor.execute("""
+                INSERT INTO stats_history (user_id, subject, task_type, success, tokens_saved)
+                VALUES (?, ?, ?, ?, ?)
+            """, (user_id, "Тест", "auto_solve", 1, 500))
             conn.commit()
 
     def get_all_users_with_tokens(self):
