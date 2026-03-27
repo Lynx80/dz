@@ -1,4 +1,5 @@
 import asyncio
+from typing import Optional
 import logging
 import os
 import re
@@ -115,6 +116,7 @@ def get_settings_kb(solve_delay=15, accuracy_mode="advanced"):
 
 def get_profile_kb():
     builder = InlineKeyboardBuilder()
+    builder.button(text="🔄 ОБНОВИТЬ ПРОФИЛЬ", callback_data="refresh_profile_data")
     builder.button(text="🗑 УДАЛИТЬ ТОКЕН", callback_data="delete_token_confirm")
     builder.button(text="🔙 НАЗАД", callback_data="back_to_main")
     builder.adjust(1)
@@ -201,9 +203,10 @@ async def auto_solve_start(message: types.Message, state: FSMContext):
     await state.set_state(BotStates.AUTO_SOLVE_WEEK)
 
 @dp.message(F.text == "👤 ПРОФИЛЬ")
-async def profile_main(message: types.Message, state: FSMContext):
-    user = db.get_user(message.from_user.id)
-    stats = db.get_stats(message.from_user.id)
+async def profile_main(message: types.Message, state: FSMContext, user_id: Optional[int] = None):
+    target_id = user_id or message.from_user.id
+    user = db.get_user(target_id)
+    stats = db.get_stats(target_id)
     text = (
         f"👤 ПРОФИЛЬ ПОЛЬЗОВАТЕЛЯ\n━━━━━━━━━━━━━━━\n"
         f"📛 Имя: {user.get('first_name') or 'Не указано'}\n"
@@ -213,7 +216,10 @@ async def profile_main(message: types.Message, state: FSMContext):
         f"✅ Решено ДЗ: {stats['solved']}\n"
         f"⭐ Средний балл: {stats['avg']}\n"
     )
-    await message.answer(text, reply_markup=get_profile_kb())
+    if isinstance(message, types.Message):
+        await message.answer(text, reply_markup=get_profile_kb())
+    else: # Это CallbackQuery.message
+        await message.edit_text(text, reply_markup=get_profile_kb())
 
 @dp.message(F.text == "⚙️ НАСТРОЙКИ")
 async def settings_start(message: types.Message, state: FSMContext):
@@ -288,8 +294,8 @@ async def manual_day_select(call: types.CallbackQuery, state: FSMContext):
     
     # 1. Получаем данные
     try:
-        schedule = await parser.get_mosreg_schedule(user['token_mos'], user['student_id'], date_str)
-        homeworks = await parser.get_mosreg_homework(user['token_mos'], user['student_id'], date_str)
+        schedule = await parser.get_mosreg_schedule(user['token_mos'], user['student_id'], date_str, mesh_id=user.get('mesh_id'))
+        homeworks = await parser.get_mosreg_homework(user['token_mos'], user['student_id'], date_str, mesh_id=user.get('mesh_id'))
     except MosregAuthError:
         await call.message.edit_text(
             "⚠️ ВАША СЕССИЯ ИСТЕКЛА!\n\nТОКЕН БОЛЬШЕ НЕ ДЕЙСТВИТЕЛЕН. ПОЖАЛУЙСТА, ОБНОВИТЕ ЕГО:\n"
@@ -321,6 +327,8 @@ async def manual_day_select(call: types.CallbackQuery, state: FSMContext):
                 text += "   ┗ БЕЗ Д/З\n"
             text += "━━━━━━━━━━━━━━━\n"
     
+    text += f"\n🕒 ОБНОВЛЕНО В {datetime.now().strftime('%H:%M:%S')}"
+    
     await call.message.edit_text(text, reply_markup=get_hw_action_kb(date_str))
 
 @dp.callback_query(F.data.startswith("batch_solve_pre_"))
@@ -334,7 +342,7 @@ async def batch_solve_handler(call: types.CallbackQuery, state: FSMContext):
     date_str, mode = parts[2], parts[3]
     user = db.get_user(call.from_user.id)
     try:
-        homeworks = await parser.get_mosreg_homework(user['token_mos'], user['student_id'], date_str)
+        homeworks = await parser.get_mosreg_homework(user['token_mos'], user['student_id'], date_str, mesh_id=user.get('mesh_id'))
     except MosregAuthError:
         await call.message.edit_text(
             "⚠️ ВАША СЕССИЯ ИСТЕКЛА!\n\nТОКЕН БОЛЬШЕ НЕ ДЕЙСТВИТЕЛЕН. ПОЖАЛУЙСТА, ОБНОВИТЕ ЕГО:\n"
@@ -403,7 +411,11 @@ async def refresh_user_data(call: types.CallbackQuery):
     await call.answer("⏳ ОБНОВЛЯЮ...")
     profile = await parser.fetch_mosreg_profile(user['token_mos'])
     if profile:
-        db.update_user(call.from_user.id, first_name=profile['first_name'], grade=profile.get('grade', ''), student_id=profile['student_id'])
+        db.update_user(call.from_user.id, 
+                       first_name=profile['first_name'], 
+                       grade=profile.get('grade', ''), 
+                       student_id=profile['student_id'],
+                       mesh_id=profile.get('mesh_id'))
         await call.message.answer("✅ ДАННЫЕ ОБНОВЛЕНЫ!")
     else: await call.answer("❌ ОШИБКА ОБНОВЛЕНИЯ", show_alert=True)
 
@@ -437,7 +449,12 @@ async def process_token(message: types.Message, state: FSMContext):
     msg = await message.answer("🔍 ПРОВЕРКА ТОКЕНА...")
     profile = await parser.fetch_mosreg_profile(token)
     if profile:
-        db.update_user(message.from_user.id, token_mos=token, first_name=profile['first_name'], grade=profile.get('grade', ''), student_id=profile['student_id'])
+        db.update_user(message.from_user.id, 
+                       token_mos=token, 
+                       first_name=profile['first_name'], 
+                       grade=profile.get('grade', ''), 
+                       student_id=profile['student_id'],
+                       mesh_id=profile.get('mesh_id'))
         await msg.delete()
         await message.answer(f"✅ УСПЕШНО! ПРИВЕТ, {profile['first_name']}!", reply_markup=get_main_menu_kb())
         await state.set_state(BotStates.MAIN_MENU)
@@ -459,6 +476,34 @@ async def back_to_settings(call: types.CallbackQuery):
     user = db.get_user(call.from_user.id)
     await call.message.edit_text("⚙️ НАСТРОЙКИ БОТА:", reply_markup=get_settings_kb(user.get('solve_delay', 15), user.get('accuracy_mode', 'excellent')))
 
+@dp.callback_query(F.data == "refresh_profile_data")
+async def refresh_profile_data(call: types.CallbackQuery, state: FSMContext):
+    user = db.get_user(call.from_user.id)
+    if not user or not user.get('token_mos'):
+        await call.answer("⚠️ ОШИБКА: ТОКЕН НЕ НАЙДЕН", show_alert=True)
+        return
+        
+    await call.answer("🔄 ОБНОВЛЯЮ ДАННЫЕ...", show_alert=False)
+    try:
+        # Пытаемся получить свежий профиль
+        new_prof = await parser.fetch_mosreg_profile(user['token_mos'])
+        if new_prof:
+            db.update_user(
+                call.from_user.id,
+                first_name=new_prof.get('first_name'),
+                last_name=new_prof.get('last_name'),
+                grade=new_prof.get('grade'),
+                student_id=new_prof.get('student_id')
+            )
+            await call.answer("✅ ПРОФИЛЬ ОБНОВЛЕН!", show_alert=True)
+            # Перерисовываем профиль
+            await profile_main(call.message, state, user_id=call.from_user.id)
+        else:
+            await call.answer("❌ НЕ УДАЛОСЬ ПОЛУЧИТЬ ДАННЫЕ", show_alert=True)
+    except Exception as e:
+        logger.error(f"Error refreshing profile: {e}")
+        await call.answer(f"❌ ОШИБКА: {str(e)[:50]}", show_alert=True)
+
 @dp.callback_query(F.data == "delete_token_confirm")
 async def delete_token_confirm(call: types.CallbackQuery):
     builder = InlineKeyboardBuilder()
@@ -475,7 +520,35 @@ async def delete_token_final(call: types.CallbackQuery, state: FSMContext):
 
 # ─── ФОНОВОЕ ОБНОВЛЕНИЕ ───
 
-async def token_refresher_task():
+# PID file management
+PID_FILE = "bot.pid"
+
+def create_pid_file():
+    if os.path.exists(PID_FILE):
+        try:
+            with open(PID_FILE, 'r') as f:
+                pid = f.read().strip()
+            # Check if process is actually running using tasklist
+            import subprocess
+            output = subprocess.check_output(f'tasklist /FI "PID eq {pid}"', shell=True).decode('cp866')
+            if pid in output:
+                logger.error(f"Bot is already running (PID: {pid}). Exiting.")
+                return False
+        except Exception:
+            pass
+    
+    with open(PID_FILE, 'w') as f:
+        f.write(str(os.getpid()))
+    return True
+
+def remove_pid_file():
+    if os.path.exists(PID_FILE):
+        try:
+            os.remove(PID_FILE)
+        except:
+            pass
+
+async def token_refresher_task(parser_service):
     """Фоновая задача для автоматического обновления токенов каждые 40 минут."""
     while True:
         try:
@@ -483,7 +556,7 @@ async def token_refresher_task():
             users = db.get_all_users_with_tokens()
             for u in users:
                 try:
-                    new_token = await parser.refresh_token(u['token_mos'])
+                    new_token = await parser_service.refresh_token(u['token_mos'])
                     if new_token:
                         db.update_user(u['user_id'], token_mos=new_token)
                         logger.info(f"Refreshed token for user {u['user_id']}")
@@ -491,10 +564,7 @@ async def token_refresher_task():
                         logger.warning(f"Could not refresh token for user {u['user_id']} (no response)")
                 except MosregAuthError:
                     logger.warning(f"Token for user {u['user_id']} is dead. Stopping refresher for this user.")
-                    # Опционально: db.update_user(u['user_id'], token_mos=None) 
-                    # Но лучше оставить как есть, чтобы bot.py показал ошибку в UI
                 
-                # Небольшая пауза между пользователями
                 await asyncio.sleep(2)
         except Exception as e:
             logger.error(f"Refresher task error: {e}")
@@ -502,10 +572,30 @@ async def token_refresher_task():
         await asyncio.sleep(40 * 60)
 
 async def main():
-    logger.info("Bot started!")
-    # Запуск фоновой задачи
-    asyncio.create_task(token_refresher_task())
-    await dp.start_polling(bot)
+    if not create_pid_file():
+        return
+
+    logger.info("Bot starting...")
+    import aiohttp
+    
+    async with aiohttp.ClientSession() as shared_session:
+        # Update parser to use the shared session
+        parser.session = shared_session
+        
+        # Start background tasks
+        refresher = asyncio.create_task(token_refresher_task(parser))
+        
+        try:
+            await dp.start_polling(bot)
+        finally:
+            refresher.cancel()
+            remove_pid_file()
+            logger.info("Bot stopped.")
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        pass
+    finally:
+        remove_pid_file()
