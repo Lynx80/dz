@@ -1,8 +1,10 @@
 import asyncio
+import html
 from typing import Optional
 import logging
 import os
 import re
+import hashlib
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
 
@@ -12,7 +14,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.utils.keyboard import ReplyKeyboardBuilder, InlineKeyboardBuilder
-from aiogram.types import ReplyKeyboardMarkup, InlineKeyboardMarkup
+from aiogram.types import ReplyKeyboardMarkup, InlineKeyboardMarkup, ReplyKeyboardRemove
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.client.session.aiohttp import AiohttpSession
 
@@ -51,29 +53,41 @@ class BotStates(StatesGroup):
     SETTINGS = State()
     PROFILE = State()
     WAITING_FOR_TOKEN = State()
+    WAITING_FOR_QR_SCAN = State()
 
 # ─── КЛАВИАТУРЫ ───
 
 def get_main_menu_kb():
     builder = ReplyKeyboardBuilder()
     builder.button(text="📚 МОЁ ДЗ")
-    builder.button(text="⚡ АВТО РЕШЕНИЕ")
     builder.button(text="👤 ПРОФИЛЬ")
     builder.button(text="⚙️ НАСТРОЙКИ")
-    builder.button(text="📡 О НАС")
-    builder.button(text="💬 ПОДДЕРЖКА")
-    builder.adjust(2)
+    
+    # Динамический текст кнопки ДЗ (Синхронизировано с обработчиком)
+    now = datetime.now()
+    weekday = now.weekday()
+    hour = now.hour
+    
+    if weekday == 4: # Пятница
+        hw_text = "📚 ДЗ НА СЕГОДНЯ" if hour < 15 else "📚 ДЗ НА ПОНЕДЕЛЬНИК"
+    elif weekday == 5 or weekday == 6: # Суббота или Воскресенье
+        hw_text = "📚 ДЗ НА ПОНЕДЕЛЬНИК"
+    else: # Пн-Чт
+        hw_text = "📚 ДЗ НА СЕГОДНЯ" if hour < 15 else "📚 ДЗ НА ЗАВТРА"
+        
+    builder.button(text=hw_text)
+    builder.adjust(1, 2, 1)
     return builder.as_markup(resize_keyboard=True)
 
 def get_week_kb(prefix="week"):
     builder = InlineKeyboardBuilder()
     builder.button(text="📅 ПРЕДЫДУЩАЯ", callback_data=f"{prefix}_prev")
     builder.button(text="📅 ТЕКУЩАЯ", callback_data=f"{prefix}_curr")
-    builder.button(text="🔙 НАЗАД", callback_data="back_to_main")
+    builder.button(text="📅 СЛЕДУЮЩАЯ", callback_data=f"{prefix}_next")
     builder.adjust(2, 1)
     return builder.as_markup()
 
-def get_days_kb(week_offset=0, prefix="day"):
+def get_days_kb(week_offset=0, prefix="manual"):
     builder = InlineKeyboardBuilder()
     today = datetime.now()
     monday = today - timedelta(days=today.weekday()) + timedelta(weeks=week_offset)
@@ -82,17 +96,97 @@ def get_days_kb(week_offset=0, prefix="day"):
         d = monday + timedelta(days=i)
         date_str = d.strftime('%Y-%m-%d')
         builder.button(text=f"{days_ru[i]} {d.strftime('%d.%m')}", callback_data=f"{prefix}_{date_str}")
-    builder.button(text="🔙 НАЗАД", callback_data=f"back_to_weeks_{prefix}")
-    builder.adjust(3, 2, 1)
+    builder.adjust(3, 2)
     return builder.as_markup()
 
-def get_hw_action_kb(date_str, prefix="manual"):
+def get_hw_reply_kb():
+    builder = ReplyKeyboardBuilder()
+    # Кнопки ИИ (отдельный ряд)
+    builder.row(types.KeyboardButton(text="🧠 РЕШИТЬ ВСЁ [ЦДЗ]"), types.KeyboardButton(text="🔍 ВЫБОРОЧНО [ЦДЗ]"))
+    # Кнопки управления (внизу)
+    builder.row(types.KeyboardButton(text="🔄 ОБНОВИТЬ"), types.KeyboardButton(text="🔙 НАЗАД"), types.KeyboardButton(text="🏠 МЕНЮ"))
+    return builder.as_markup(resize_keyboard=True)
+
+def get_nav_reply_kb():
+    builder = ReplyKeyboardBuilder()
+    builder.row(types.KeyboardButton(text="🔙 НАЗАД"), types.KeyboardButton(text="🏠 МЕНЮ"))
+    return builder.as_markup(resize_keyboard=True)
+
+def get_hw_toggles_kb(hw_list, date_str):
+    """Инлайн-клавиатура для управления статусом И решения конкретных тестов"""
     builder = InlineKeyboardBuilder()
-    builder.button(text="🎯 РЕШАТЬ ВСЕ ЦДЗ ЗА СЕГОДНЯ", callback_data=f"batch_solve_pre_{date_str}")
-    builder.button(text="🔍 РЕШАТЬ ВЫБОРОЧНО", callback_data=f"selective_solve_{date_str}")
-    builder.button(text="🔄 ОБНОВИТЬ", callback_data=f"refresh_day_{date_str}_{prefix}")
-    builder.button(text="🔙 НАЗАД", callback_data="back_to_days")
-    builder.adjust(1, 1, 2)
+    
+    # 1. Кнопки предметов (для отметки выполнения)
+    for hw in hw_list:
+        status_icon = "✅" if hw['is_done'] else ("🌟" if hw.get('is_ec') else "❌")
+        subj_name = hw['subject']
+        if len(subj_name) > 12: subj_name = subj_name[:10] + ".."
+        builder.button(text=f"{status_icon} {subj_name}", callback_data=f"hw_done:{date_str}:{hw['hash']}")
+    
+    builder.adjust(2)
+    
+    # 2. Кнопки быстрого решения для КАЖДОГО теста отдельно
+    for hw in hw_list:
+        if not hw['is_done'] and not hw.get('is_ec'):
+            desc = hw.get('description', '').lower()
+            if any(x in desc for x in ['http', 'тест', 'цдз', 'мэш']):
+                 builder.row(types.InlineKeyboardButton(
+                     text=f"🧠 РЕШИТЬ: {hw['subject'][:15]}", 
+                     callback_data=f"ai_select_subj:{hw['id']}:{date_str}"
+                 ))
+    
+    # 3. Главные кнопки ИИ в самом низу
+    builder.row(
+        types.InlineKeyboardButton(text="🧠 РЕШИТЬ ВСЁ", callback_data=f"ai_solve_all:{date_str}"),
+        types.InlineKeyboardButton(text="🔍 ВЫБОРОЧНО", callback_data=f"ai_solve_select:{date_str}")
+    )
+    
+    # Кнопка ОБНОВИТЬ
+    builder.row(types.InlineKeyboardButton(text="🔄 ОБНОВИТЬ СПИСОК", callback_data=f"refresh_hw_list:{date_str}"))
+    
+    return builder.as_markup()
+
+def get_solve_accuracy_kb(task_id, date_str, is_batch=False):
+    """Клавиатура выбора точности решения (Шаг 2)"""
+    builder = InlineKeyboardBuilder()
+    prefix = "batch_acc" if is_batch else f"task_acc:{task_id}"
+    
+    # Режим имитации теперь описывается тут (по желанию пользователя)
+    desc = "🤖 **Имитация человека:** бот сам меняет время ответа на каждый вопрос, чтобы поведение выглядело естественно."
+    
+    builder.button(text="⭐ Базовая (70%)", callback_data=f"{prefix}:basic:{date_str}")
+    builder.button(text="⭐⭐ Продвинутая (85%)", callback_data=f"{prefix}:advanced:{date_str}")
+    builder.button(text="⭐⭐⭐ Идеальная (95%)", callback_data=f"{prefix}:perfect:{date_str}")
+    
+    back_data = "ai_solve_select" if is_batch else f"back_to_select_subj:{date_str}"
+    builder.button(text="🔙 Назад", callback_data=back_data)
+    
+    builder.adjust(1)
+    return builder.as_markup()
+
+def get_solve_time_kb(task_id, accuracy, date_str):
+    """Клавиатура выбора времени (Шаг 3)"""
+    builder = InlineKeyboardBuilder()
+    options = [5, 10, 15, 25]
+    for mins in options:
+        # Теперь ведет к выбору режима
+        builder.button(text=f"⏱️ {mins} мин", callback_data=f"sel_mode:{task_id}:{accuracy}:{mins}:{date_str}")
+        
+    is_batch = task_id == "all"
+    back_data = f"ai_solve_all:{date_str}" if is_batch else f"ai_select_subj:{task_id}:{date_str}"
+    builder.button(text="🔙 Назад", callback_data=back_data)
+    builder.adjust(2)
+    return builder.as_markup()
+
+def get_solve_final_mode_kb(task_id, accuracy, mins, date_str):
+    """Клавиатура выбора режима (Шаг 4)"""
+    builder = InlineKeyboardBuilder()
+    # Кнопки старта
+    builder.button(text="🤖 С имитацией человека", callback_data=f"start_solve:{task_id}:{accuracy}:human:{mins}:{date_str}")
+    builder.button(text="⏱️ Обычный режим", callback_data=f"start_solve:{task_id}:{accuracy}:normal:{mins}:{date_str}")
+    
+    builder.button(text="🔙 Назад", callback_data=f"select_time:{task_id}:{accuracy}:{date_str}")
+    builder.adjust(1)
     return builder.as_markup()
 
 def get_batch_solve_pre_kb(date_str):
@@ -152,6 +246,42 @@ def get_token_help_kb():
 
 # ─── ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ───
 
+def classify_hw(desc: str, url: str) -> tuple[str, str]:
+    """Возвращает (тип, иконка)"""
+    desc_l = desc.lower().strip()
+    url_l = url.lower()
+    
+    # 0. ИГНОРИРУЕМ "БЕЗ ДЗ"
+    if any(x in desc_l for x in ["без дз", "без д/з", "нет заданий", "не задано", "нет дз", "без домашнего задания"]) or not desc_l:
+        return "нет", "🕊️"
+
+    # 1. ТЕСТ (Приоритет ссылкам)
+    if any(x in url_l for x in ["/test", "/exam", "/quiz", "/assessment", "/training", "videouroki.net/tests", "uchebnik.mos.ru/exam", "gosuslugi.ru/edu-content", "edu-content"]):
+        return "тест", "⚡"
+    
+    # 2. ПИСЬМЕННОЕ (Приоритет действию)
+    # Если есть номера, страницы или слова действия типа "выучить", "доделать"
+    written_kws = ["номер", "стр.", "стр ", "с.", "упр", "упражнен", "задач", "параграф", "№", "выучить", "доделать", "сделать", "решить", "выполнить", "написать"]
+    if any(x in desc_l for x in written_kws):
+        return "письм.", "✍️"
+
+    # 3. ТЕСТ (По ключевым словам в тексте)
+    if any(x in desc_l for x in ["тест", "тренажер", "контрольн", "экзамен", "цдз", "📚"]):
+        return "тест", "⚡"
+    
+    # 4. ВИДЕО
+    if any(x in desc_l for x in ["видео", "посмотреть", "ролик", "видеоурок"]) or \
+       any(x in url_l for x in ["youtube.com", "youtu.be", "rutube.ru", "vimeo.com", "/video/"]):
+        return "видео", "📺"
+        
+    # 5. ТЕОРИЯ / МАТЕРИАЛ (Если не попало в письменное выше)
+    if any(x in desc_l for x in ["прочитать", "повторить", "лекци", "материал", "правил", "изучить"]) or \
+       any(x in url_l for x in ["/material", "/lesson", "/library", "resh.edu.ru"]):
+        return "теория", "📖"
+        
+    # 6. ПО УМОЛЧАНИЮ
+    return "письм.", "✍️"
+
 async def check_token(message: types.Message, user):
     if not user or not user.get('token_mos'):
         help_text = (
@@ -178,6 +308,247 @@ async def check_token(message: types.Message, user):
         return False
     return True
 
+async def show_day_homework(message: types.Message, user: dict, date_str: str, state: FSMContext, is_callback: bool = False):
+    """Общий метод для отображения расписания и ДЗ на конкретный день."""
+    # 1. Получаем данные
+    try:
+        # Автоматическое восстановление ID если они потеряны (для старых записей в БД)
+        if not user.get('student_id') or not user.get('mesh_id'):
+            logger.info(f"User {user['user_id']} missing IDs. Repairing...")
+            new_p = await parser.fetch_mosreg_profile(user['token_mos'])
+            if new_p:
+                db.update_user(user['user_id'], 
+                             student_id=new_p.get('student_id'), 
+                             mesh_id=new_p.get('mesh_id'),
+                             first_name=new_p.get('first_name'),
+                             last_name=new_p.get('last_name'),
+                             grade=new_p.get('grade'))
+                user.update(new_p)
+                logger.info(f"User {user['user_id']} IDs repaired: Student={user['student_id']}, Mesh={user['mesh_id']}")
+
+        schedule = await parser.get_mosreg_schedule(user['token_mos'], user['student_id'], date_str, mesh_id=user.get('mesh_id'))
+        homeworks = await parser.get_mosreg_homework(user['token_mos'], user['student_id'], date_str, mesh_id=user.get('mesh_id'))
+    except MosregAuthError:
+        text = (
+            "⚠️ ВАША СЕССИЯ ИСТЕКЛА!\n\nТОКЕН БОЛЬШЕ НЕ ДЕЙСТВИТЕЛЕН. ПОЖАЛУЙСТА, ОБНОВИТЕ ЕГО:\n"
+            "🔗 [ПОЛУЧИТЬ НОВЫЙ ТОКЕН](https://authedu.mosreg.ru/v2/token/refresh)\n\n"
+            "ПРОСТО ОТПРАВЬТЕ НОВЫЙ ТОКЕН МНЕ."
+        )
+        kb = InlineKeyboardBuilder().button(text="🔙 В МЕНЮ", callback_data="back_to_main").as_markup()
+        if is_callback:
+            await message.edit_text(text, reply_markup=kb, parse_mode="Markdown")
+        else:
+            await message.answer(text, reply_markup=kb, parse_mode="Markdown")
+        return
+
+    # Подготовка даты для заголовка
+    days_ru = ["Понедельник", "Вторник", "Среда", "Четверг", "Пятница", "Суббота", "Воскресенье"]
+    target_date_obj = datetime.strptime(date_str, '%Y-%m-%d')
+    day_name = days_ru[target_date_obj.weekday()]
+    
+    # ─── Анализ и классификация ───
+    unique_tasks = {} # {(subject, desc): first_lesson_num}
+    stats = {"тест": 0, "видео": 0, "теория": 0, "письм.": 0}
+    
+    # ─── Сбор всех уникальных заданий для статистики и кнопок ───
+    all_unique_tasks = []
+    task_keys = set()
+    for item in (schedule or []):
+        hw_item = next((h for h in homeworks if h['subject'].lower() in item['subject'].lower() or item['subject'].lower() in h['subject'].lower()), None)
+        if hw_item:
+            desc = hw_item['description'].strip()
+            task_key = (item['subject'].lower().strip(), desc) # Use strip for subject in key
+            if task_key not in task_keys:
+                task_keys.add(task_key)
+                url_match = re.search(r'https?://\S+', desc)
+                url = url_match.group(0) if url_match else ""
+                hw_type, _ = classify_hw(desc, url)
+                if hw_type != "нет":
+                    # СТРОГИЙ ХЕШ (с strip)
+                    hw_hash = hashlib.md5(f"{item['subject'].strip()}:{desc}".encode()).hexdigest()
+                    is_done = db.is_hw_completed(user['user_id'], date_str, hw_hash)
+                    
+                    # Внеурочка не идет в обязательную статистику, если нет ДЗ
+                    is_ec = item.get('source') == 'EC'
+                    
+                    all_unique_tasks.append({
+                        'subject': item['subject'],
+                        'desc': desc,
+                        'type': hw_type,
+                        'hash': hw_hash,
+                        'is_done': is_done,
+                        'task_key': task_key,
+                        'is_ec': is_ec
+                    })
+                    if not is_ec:
+                        stats[hw_type] += 1
+
+    # ─── ОСНОВНОЙ ВЫВОД РАСПИСАНИЯ ───
+    day_name = ["Понедельник", "Вторник", "Среда", "Четверг", "Пятница", "Суббота", "Воскресенье"][target_date_obj.weekday()]
+    text_parts = [f"<b>🗓 Расписание на {target_date_obj.strftime('%d.%m')} ({day_name})</b>\n"]
+    
+    unique_tasks_shown = {} # {(subject, clean_desc): lesson_num}
+    
+    for i, item in enumerate(schedule, 1):
+        # 1. Перемена ПЕРЕД уроком
+        if i > 1:
+            prev_item = schedule[i-2]
+            try:
+                prev_end = prev_item['time'].split('-')[1].strip()
+                curr_start = item['time'].split('-')[0].strip()
+                t1 = datetime.strptime(prev_end, "%H:%M")
+                t2 = datetime.strptime(curr_start, "%H:%M")
+                diff = int((t2 - t1).total_seconds() / 60)
+                if 0 < diff < 120:
+                    text_parts.append(f"<i>   ☕️ Перемена {diff} мин</i>") # Убрал лишний \n
+            except:
+                pass
+
+        # 2. Поиск задания
+        hw_item = next((h for h in homeworks if h['subject'].lower() in item['subject'].lower() or item['subject'].lower() in h['subject'].lower()), None)
+        
+        num_emoji = ["0️⃣","1️⃣","2️⃣","3️⃣","4️⃣","5️⃣","6️⃣","7️⃣","8️⃣","9️⃣","🔟"][i] if i <= 10 else f"{i}."
+        room = f"каб. {item['room']}" if item['room'] else ""
+        
+        is_remote = "дистанц" in item.get('room', '').lower() or "дистанц" in item.get('subject', '').lower()
+        remote_label = " 💻" if is_remote else ""
+        
+        is_ec = item.get('source') == 'EC'
+        subj_icon = "📔" if is_ec else "📙"
+        is_done = False
+        
+        if hw_item:
+            desc = hw_item['description'].strip()
+            hw_hash = hashlib.md5(f"{item['subject'].strip()}:{desc}".encode()).hexdigest()
+            is_done = db.is_hw_completed(user['user_id'], date_str, hw_hash)
+            if is_ec: subj_icon = "✅" if is_done else "🌟" 
+            else:
+                hw_type, _ = classify_hw(desc, "")
+                if hw_type == "нет": subj_icon = "🕊️"
+                else: subj_icon = "✅" if is_done else "❌"
+        
+        time_styled = f"<code>{item['time']}</code>"
+        text_parts.append(f"{num_emoji} {time_styled} | {room}{remote_label}")
+        text_parts.append(f"{subj_icon} <b>{html.escape(item['subject'].upper())}</b>")
+        
+        if is_ec:
+            text_parts.append("   └ 🌟 Внеурочная деятельность")
+        
+        if not hw_item:
+            text_parts.append("   └ 🕊️ <i>Без ДЗ</i>\n")
+        else:
+            desc = hw_item['description'].strip()
+            found_links = re.findall(r'https?://\S+', desc)
+            clean_desc = re.sub(r'https?://\S+', '', desc).strip('; ')
+            clean_desc = re.sub(r':\s*$', '', clean_desc).strip()
+            
+            # --- ПРОВЕРКА НА ПОВТОР ДЗ ---
+            task_key = (item['subject'].lower().strip(), clean_desc)
+            if task_key in unique_tasks_shown:
+                prev_num = unique_tasks_shown[task_key]
+                text_parts.append(f"   └ 🔄 ДЗ как на {prev_num} уроке\n")
+                continue
+            
+            unique_tasks_shown[task_key] = i # Запоминаем номер первого появления
+            
+            if not clean_desc and not hw_item.get('materials') and not found_links:
+                clean_desc = "Задание не указано"
+            elif not clean_desc and (hw_item.get('materials') or found_links):
+                clean_desc = "Задание по ссылке ниже"
+            
+            hw_type, type_icon = classify_hw(desc, "")
+            status_task_icon = "✅" if is_done else type_icon
+            text_parts.append(f"   └ {status_task_icon} <blockquote>{html.escape(clean_desc)}</blockquote>")
+            
+            all_links = []
+            seen_urls = set()
+            for m in hw_item.get('materials', []):
+                l = m.get('link', '')
+                if l and l not in seen_urls:
+                    all_links.append(m); seen_urls.add(l)
+            for l in found_links:
+                l = l.rstrip('.,;:')
+                if l not in seen_urls:
+                    all_links.append({'title': 'Ссылка', 'link': l}); seen_urls.add(l)
+
+            if all_links:
+                for m in all_links:
+                    m_title = html.escape(m.get('title', 'Материал'))
+                    m_title = re.sub(r'^[⚡📎🔗]\s*', '', m_title)
+                    m_link = m.get('link', '')
+                    if m_link:
+                        safe_link = html.escape(m_link)
+                        m_icon = "⚡️" if any(x in m_link.lower() for x in ['edu-content', 'uchebnik', 'test', 'videouroki']) else "🔗"
+                        link_label = "ПЕРЕЙТИ К ТЕСТУ" if m_icon == "⚡️" else m_title
+                        text_parts.append(f"     {m_icon} <a href='{safe_link}'><b>{link_label}</b></a>")
+            text_parts.append("") 
+        
+    text_parts.append("──────────")
+
+    # ─── СВОДКА И ПРОГРЕСС В КОНЦЕ ───
+    total_tasks = len(all_unique_tasks)
+    done_tasks = sum(1 for t in all_unique_tasks if t['is_done'])
+    
+    footer = ["\n📊 <b>ИТОГИ ДНЯ:</b>"]
+    
+    if total_tasks > 0:
+        percent = int((done_tasks / total_tasks) * 100)
+        filled = int(done_tasks / total_tasks * 10)
+        bar = "🟢" * filled + "⚪" * (10 - filled)
+        footer.append(f"📈 Прогресс: {bar} {percent}%")
+        
+        # Suggestion 2: Динамическая похвала
+        if percent == 100:
+            praise = "🥳 <b>ИДЕАЛЬНО! ТЫ ПОБЕДИЛ ЭТО ДЕНЬ!</b> 🔥"
+        elif percent >= 80:
+            praise = "🎯 <b>ФИНИШНАЯ ПРЯМАЯ! ЕЩЁ ЧУТЬ-ЧУТЬ!</b>"
+        elif percent >= 50:
+            praise = "⚡ <b>ХОРОШИЙ ТЕМП! БОЛЬШЕ ПОЛОВИНЫ ГОТОВО!</b>"
+        elif percent >= 20:
+            praise = "🚀 <b>ПОГНАЛИ! НАЧАЛО ПОЛОЖЕНО!</b>"
+        else:
+            praise = "☕ <b>ВРЕМЯ ПРИСТУПАТЬ К ДЕЛАМ!</b>"
+        footer.append(praise)
+            
+        summary_lines = []
+        if stats['тест'] > 0: summary_lines.append(f"⚡ {stats['тест']} тест(а)")
+        if stats['теория'] > 0: summary_lines.append(f"📖 {stats['теория']} теория")
+        if stats['письм.'] > 0: summary_lines.append(f"✍️ {stats['письм.']} письм.")
+        if summary_lines:
+            footer.append("📝 К выполнению: " + ", ".join(summary_lines))
+            
+        # Показываем внеурочку отдельно, если есть
+        ec_tasks = [t for t in all_unique_tasks if t['is_ec']]
+        if ec_tasks:
+            done_ec = sum(1 for t in ec_tasks if t['is_done'])
+            footer.append(f"🌟 Внеурочка: {done_ec}/{len(ec_tasks)} (по желанию)")
+    else:
+        footer.append("🕊️ На сегодня заданий нет!")
+
+    text_parts.append("\n".join(footer))
+    text_parts.append(f"\n🕒 Обновлено в {datetime.now().strftime('%H:%M:%S')}")
+
+    # Сохраняем состояние
+    await state.update_data(current_view_date=date_str)
+    await state.set_state(BotStates.HOMEWORK_VIEW)
+
+    # Клавиатура со статусами и кнопками ИИ
+    inline_kb = get_hw_toggles_kb(all_unique_tasks, date_str)
+    
+    final_text = "\n".join(text_parts)
+    
+    if is_callback:
+        try: await message.edit_text(final_text, reply_markup=inline_kb, parse_mode="HTML", disable_web_page_preview=True)
+        except: await message.answer(final_text, reply_markup=inline_kb, parse_mode="HTML", disable_web_page_preview=True)
+    else:
+        await message.answer(final_text, reply_markup=inline_kb, parse_mode="HTML", disable_web_page_preview=True)
+    
+    # Всегда обновляем нижние кнопки, если это не колбэк (или если нужно форсировать после изменений)
+    if not is_callback:
+        # get_hw_reply_kb() уже отправлен в hw_tomorrow или других местах, но для надежности:
+        pass
+        # Но обычно оно уже стоит с этапа выбора дат.
+
 # ─── ОБРАБОТЧИКИ ───
 
 @dp.message(Command("start"))
@@ -192,8 +563,64 @@ async def cmd_start(message: types.Message, state: FSMContext):
 async def my_hw_start(message: types.Message, state: FSMContext):
     user = db.get_user(message.from_user.id)
     if not await check_token(message, user): return
-    await message.answer("📅 ВЫБЕРИТЕ НЕДЕЛЮ:", reply_markup=get_week_kb(prefix="manual"))
+    # Навигация (Только Назад/Меню)
+    await message.answer("📅 ВЫБЕРИТЕ НЕДЕЛЮ:", reply_markup=get_nav_reply_kb())
+    await message.answer("📅 ДОСТУПНЫЕ ПЕРИОДЫ:", reply_markup=get_week_kb(prefix="manual"))
     await state.set_state(BotStates.WEEK_SELECTION)
+
+@dp.callback_query(F.data.startswith("ai_solve_"))
+async def process_inline_ai_solve(call: types.CallbackQuery, state: FSMContext):
+    parts = call.data.split(":")
+    action = parts[0]
+    date_str = parts[1]
+    
+    if action == "ai_solve_all":
+        await call.message.edit_text(f"🚀 ВСЁ ЦДЗ ({date_str}): Выберите точность решения:", 
+                                 reply_markup=get_solve_accuracy_kb("all", date_str, is_batch=True))
+    elif action == "ai_solve_select":
+        await process_selective_solve_logic(call, state, override_date=date_str, is_edit=True)
+    await call.answer()
+
+@dp.message(F.text == "🧠 РЕШИТЬ ВСЁ [ЦДЗ]")
+@dp.message(F.text == "🧠 РЕШИТЬ ВСЁ")
+async def solve_all_text_handler(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    date_str = data.get('current_view_date')
+    if not date_str:
+        date_str = datetime.now().strftime('%Y-%m-%d')
+    
+    await message.answer(f"🚀 ВСЁ ЦДЗ ({date_str}): Выберите точность решения:", 
+                         reply_markup=get_solve_accuracy_kb("all", date_str, is_batch=True))
+
+@dp.message(F.text == "🔍 ВЫБОРОЧНО [ЦДЗ]")
+@dp.message(F.text == "🔍 ВЫБОРОЧНО")
+async def solve_select_text_handler(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    date_str = data.get('current_view_date')
+    if not date_str:
+        date_str = datetime.now().strftime('%Y-%m-%d')
+    
+    # Прямой вызов логики выбора предметов
+    user = db.get_user(message.from_user.id)
+    ps = ParserService()
+    try:
+        homeworks = await ps.get_mosreg_homework(user['token_mos'], user['student_id'], date_str, mesh_id=user.get('mesh_id'))
+        if not homeworks:
+            await message.answer("❌ На этот день заданий не найдено.")
+            return
+        
+        kb_builder = InlineKeyboardBuilder()
+        for hw in homeworks:
+            desc = hw.get('description', '')[:30] + "..."
+            subj = hw.get('subject', 'Предмет')
+            kb_builder.button(text=f"🎯 {subj}: {desc}", callback_data=f"ai_select_subj:{hw['id']}:{date_str}")
+        
+        kb_builder.adjust(1)
+        kb_builder.row(types.InlineKeyboardButton(text="🔙 НАЗАД", callback_data=f"back_to_hw:{date_str}"))
+        
+        await message.answer(f"🎯 Выберите задание для решения на {date_str}:", reply_markup=kb_builder.as_markup())
+    except Exception as e:
+        await message.answer(f"❌ Ошибка: {e}")
 
 @dp.message(F.text == "⚡ АВТО РЕШЕНИЕ")
 async def auto_solve_start(message: types.Message, state: FSMContext):
@@ -234,32 +661,499 @@ async def settings_start(message: types.Message, state: FSMContext):
     )
     await state.set_state(BotStates.SETTINGS)
 
-@dp.message(F.text == "📡 О НАС")
-async def about_main(message: types.Message, state: FSMContext):
-    text = (
-        "📡 О ПРОЕКТЕ\n\n"
-        "Этот инновационный бот создан для того, чтобы облегчить учебный процесс и автоматизировать выполнение цифровых домашних заданий (ЦДЗ) на платформе МЭШ/Мосрег.\n\n"
-        "Мы постоянно работаем над улучшением алгоритмов и добавлением новых функций! ✨\n\n"
-        "📢 Канал проекта: @your_channel"
-    )
-    await message.answer(text)
+@dp.message(F.text.startswith("📚 ДЗ НА"))
+async def hw_tomorrow(message: types.Message, state: FSMContext):
+    user = db.get_user(message.from_user.id)
+    if not await check_token(message, user): return
+    
+    now = datetime.now()
+    weekday = now.weekday()
+    hour = now.hour
+    
+    # Умная логика (Синхронизировано с клавиатурой)
+    if weekday == 4: # Пятница
+        target_date = now if hour < 15 else now + timedelta(days=3)
+    elif weekday == 5: # Суббота
+        target_date = now + timedelta(days=2)
+    elif weekday == 6: # Воскресенье
+        target_date = now + timedelta(days=1)
+    else: # Пн-Чт
+        target_date = now if hour < 15 else now + timedelta(days=1)
+        
+    date_str = target_date.strftime('%Y-%m-%d')
+    await state.update_data(selected_date=date_str)
+    # Сначала ставим нижнее меню
+    await message.answer(f"🔎 Загружаю {message.text}...", reply_markup=get_hw_reply_kb())
+    await show_day_homework(message, user, date_str, state, is_callback=False)
 
-@dp.message(F.text == "💬 ПОДДЕРЖКА")
-async def support_main(message: types.Message, state: FSMContext):
-    text = (
-        "💬 ЧАТ ПОДДЕРЖКИ\n\n"
-        "Если у вас возникли вопросы, предложения или вы столкнулись с ошибкой — мы всегда готовы помочь!\n\n"
-        "🔗 Ссылка на чат: [Перейти в чат](https://t.me/your_support_chat)"
+@dp.callback_query(F.data.startswith("ai_solve_"))
+async def process_inline_ai_solve(call: types.CallbackQuery, state: FSMContext):
+    parts = call.data.split(":")
+    action = parts[0]
+    date_str = parts[1]
+    
+    if action == "ai_solve_all":
+        await call.message.answer(f"🚀 ВСЁ ЦДЗ ({date_str}): Выберите точность решения:", 
+                                reply_markup=get_solve_accuracy_kb("all", date_str, is_batch=True))
+    elif action == "ai_solve_select":
+        await process_selective_solve_logic(call.message, state, override_date=date_str)
+    await call.answer()
+
+@dp.callback_query(F.data.startswith("ai_select_subj:"))
+async def process_ai_select_subj(call: types.CallbackQuery, state: FSMContext):
+    parts = call.data.split(":")
+    hw_id = parts[1]
+    date_str = parts[2]
+    await call.message.edit_text(f"🎯 Выберите точность решения для этого задания:", 
+                               reply_markup=get_solve_accuracy_kb(hw_id, date_str))
+    await call.answer()
+
+@dp.callback_query(F.data.startswith("back_to_select_subj:"))
+async def process_back_to_select_subj(call: types.CallbackQuery, state: FSMContext):
+    date_str = call.data.split(":")[1]
+    await process_selective_solve_logic(call, state, override_date=date_str, is_edit=True)
+    await call.answer()
+
+@dp.callback_query(F.data.startswith("task_acc:"))
+@dp.callback_query(F.data.startswith("batch_acc:"))
+@dp.callback_query(F.data.startswith("task_acc:"))
+@dp.callback_query(F.data.startswith("batch_acc:"))
+async def process_ai_select_accuracy_to_time(call: types.CallbackQuery):
+    parts = call.data.split(":")
+    if parts[0] == "task_acc":
+        hw_id, accuracy, date_str = parts[1], parts[2], parts[3]
+    else:
+        hw_id, accuracy, date_str = "all", parts[1], parts[2]
+        
+    await process_ai_select_time_logic(call, hw_id, accuracy, date_str)
+
+@dp.callback_query(F.data.startswith("select_time:"))
+async def process_ai_select_time_callback(call: types.CallbackQuery):
+    parts = call.data.split(":")
+    hw_id, accuracy, date_str = parts[1], parts[2], parts[3]
+    await process_ai_select_time_logic(call, hw_id, accuracy, date_str)
+
+async def process_ai_select_time_logic(call: types.CallbackQuery, hw_id, accuracy, date_str):
+    limit_info = "⌛ Ищу ограничение по времени..."
+    await call.message.edit_text(f"⏱️ **На сколько минут растянуть решение?**\n\n{limit_info}", parse_mode="Markdown")
+    
+    limit = None
+    if hw_id != "all":
+        user = db.get_user(call.from_user.id)
+        ps = ParserService()
+        homeworks = await ps.get_mosreg_homework(user['token_mos'], user['student_id'], date_str, mesh_id=user.get('mesh_id'))
+        target_hw = next((h for h in homeworks if str(h.get('id')) == hw_id), None)
+        if target_hw:
+            url_match = re.search(r'https?://\S+', target_hw.get('description', ''))
+            if url_match:
+                limit = await ps.get_test_limit(url_match.group(0))
+    
+    if limit:
+        limit_text = f"❗ **ОГРАНИЧЕНИЕ ТЕСТА: {limit} МИН.**"
+    else:
+        limit_text = "ℹ️ Ограничение по времени не найдено или отсутствует."
+        
+    text = (f"⏱️ **На сколько минут растянуть решение?**\n\n"
+            f"{limit_text}")
+    
+    await call.message.edit_text(text, parse_mode="Markdown",
+                               reply_markup=get_solve_time_kb(hw_id, accuracy, date_str))
+    await call.answer()
+
+@dp.callback_query(F.data.startswith("sel_mode:"))
+async def process_ai_select_final_mode(call: types.CallbackQuery):
+    parts = call.data.split(":")
+    hw_id, accuracy, mins, date_str = parts[1], parts[2], parts[3], parts[4]
+    
+    # Добавляем описание имитации сюда
+    text = (f"🛠️ **Выберите режим решения:**\n\n"
+            f"🎯 Выбрано время: **{mins} мин.**\n\n"
+            "🤖 **Имитация человека:** бот сам меняет время ответа на каждый вопрос, "
+            "чтобы поведение выглядело максимально естественно.")
+            
+    await call.message.edit_text(text, parse_mode="Markdown",
+                               reply_markup=get_solve_final_mode_kb(hw_id, accuracy, mins, date_str))
+    await call.answer()
+
+@dp.callback_query(F.data.startswith("start_solve:"))
+async def process_ai_start_solve(call: types.CallbackQuery, state: FSMContext):
+    parts = call.data.split(":")
+    # start_solve:hw_id:accuracy:mode:mins:date_str
+    hw_id, accuracy, mode, mins, date_str = parts[1], parts[2], parts[3], parts[4], parts[5]
+    
+    is_human = (mode == "human")
+    solve_delay = int(mins)
+    
+    # Конвертируем время
+    solve_delay = int(mins)
+    
+    mode_text = "🤖 ИМИТАЦИЯ" if is_human else "⏱️ ОБЫЧНЫЙ"
+    target_name = "ВСЕ ЦДЗ" if hw_id == "all" else f"Задание {hw_id[:8]}"
+    msg = await call.message.edit_text(f"🚀 **НАЧИНАЮ РЕШЕНИЕ: {target_name}**\n\n"
+                                f"🎯 Точность: {accuracy}\n"
+                                f"⚙️ Режим: {mode_text}\n"
+                                f"⏱️ Время: {mins} мин.\n\n"
+                                f"⏳ Пожалуйста, подождите...", parse_mode="Markdown")
+    
+    user = db.get_user(call.from_user.id)
+    ps = ParserService()
+    
+    try:
+        hw_mesh_id = user.get('mesh_id')
+        if hw_id == "all":
+            # Решаем всё
+            homeworks = await ps.get_mosreg_homework(user['token_mos'], user['student_id'], date_str, mesh_id=hw_mesh_id)
+            total = len([h for h in homeworks if any(kw in h.get('description', '').lower() for kw in ['gosuslugi', 'test', 'edu-content'])])
+            count = 0
+            for hw in homeworks:
+                desc = hw.get('description', '').lower()
+                if any(kw in desc for kw in ['gosuslugi', 'test', 'edu-content']):
+                    count += 1
+                    target_url = hw.get('link') or ""
+                    if not target_url:
+                        url_match = re.search(r'https?://\S+', desc)
+                        target_url = url_match.group(0) if url_match else ""
+                        
+                    if target_url:
+                        await msg.edit_text(f"⏳ Решаю {count}/{total}: **{hw['subject']}**...")
+                        await ps.solve_test(user['user_id'], target_url, accuracy_mode=accuracy, solve_delay_mins=solve_delay)
+            
+            await msg.answer("✅ Все доступные ЦДЗ решены!")
+        else:
+            # Решаем конкретное
+            homeworks = await ps.get_mosreg_homework(user['token_mos'], user['student_id'], date_str, mesh_id=hw_mesh_id)
+            target_hw = next((h for h in homeworks if str(h.get('id')) == hw_id), None)
+            
+            if not target_hw:
+                await msg.edit_text("❌ Ошибка: Задание не найдено.")
+                return
+                
+            target_url = target_hw.get('link') or ""
+            if not target_url:
+                url_match = re.search(r'https?://\S+', target_hw.get('description', ''))
+                target_url = url_match.group(0) if url_match else ""
+                
+            if not target_url:
+                await msg.edit_text("❌ Ошибка: Ссылка на тест не найдена.")
+                return
+            
+            # Статус-колбэк для обновления сообщения
+            async def status_update(text):
+                try: await msg.edit_text(f"⏳ **{target_hw['subject']}**\n\n{text}", parse_mode="Markdown")
+                except: pass
+
+            res_text, result_data = await ps.solve_test(
+                user['user_id'], url_match.group(0), 
+                accuracy_mode=accuracy, solve_delay_mins=solve_delay,
+                status_callback=status_update
+            )
+            
+            # РЕЖИМ QR-ВХОДА
+            if res_text == "NEEDS_QR":
+                qr_path = result_data # В этом случае тут путь к скриншоту QR
+                from aiogram.types import FSInputFile
+                photo = FSInputFile(qr_path)
+                
+                qr_msg = await call.message.answer_photo(
+                    photo,
+                    caption="🔑 **ТРЕБУЕТСЯ АВТОРИЗАЦИЯ!**\n\n"
+                            "Отсканируйте этот QR-код в приложении «Моя школа» или «Школьный портал» для продолжения решения теста.\n\n"
+                            "⏳ *Бот ждет сканирования...*",
+                    parse_mode="Markdown"
+                )
+                
+                await state.update_data(
+                    qr_msg_id=qr_msg.message_id,
+                    solve_params={
+                        'hw_id': hw_id,
+                        'accuracy': accuracy,
+                        'mode': mode,
+                        'mins': mins,
+                        'date_str': date_str,
+                        'url': url_match.group(0)
+                    }
+                )
+                await state.set_state(BotStates.WAITING_FOR_QR_SCAN)
+                
+                # Запускаем поллинг статуса QR
+                asyncio.create_task(poll_qr_status(call.from_user.id, state, qr_msg))
+                return
+
+            screenshot_path = result_data
+            if screenshot_path and os.path.exists(screenshot_path):
+                # Сохраняем путь для колбэка прикрепления
+                await state.update_data(last_screenshot=screenshot_path)
+                
+                # Отправляем скриншот
+                from aiogram.types import FSInputFile
+                photo = FSInputFile(screenshot_path)
+                
+                # Кнопки для прикрепления
+                kb = InlineKeyboardBuilder()
+                kb.button(text="✅ ДА, ПРИКРЕПИТЬ", callback_data=f"attach_yes:{hw_id}:{date_str}")
+                kb.button(text="❌ НЕТ", callback_data="attach_no")
+                kb.adjust(1)
+                
+                await call.message.answer_photo(
+                    photo, 
+                    caption=f"🏁 **{target_hw['subject']} РЕШЕНО!**\n\n{res_text}\n\n"
+                            f"❓ Прикрепить скриншот к заданию в Школьном портале?",
+                    reply_markup=kb.as_markup(),
+                    parse_mode="Markdown"
+                )
+            else:
+                await msg.edit_text(f"🏁 **{target_hw['subject']} РЕШЕНО!**\n\n{res_text}", parse_mode="Markdown")
+
+    except Exception as e:
+        logger.error(f"Solve error: {e}")
+        await msg.edit_text(f"❌ Произошла ошибка при решении: {str(e)[:100]}")
+    
+    # Сбрасываем состояние на HOMEWORK_VIEW, чтобы кнопки работали
+    await state.set_state(BotStates.HOMEWORK_VIEW)
+    await call.answer()
+
+async def poll_qr_status(user_id, state, message):
+    """Фоновый поллинг статуса QR-входа"""
+    ps = ParserService()
+    db_local = Database()
+    
+    for _ in range(30): # 30 попыток по 10 секунд (5 минут)
+        await asyncio.sleep(10)
+        
+        # Проверяем, не сменил ли пользователь состояние вручную
+        current_state = await state.get_state()
+        if current_state != BotStates.WAITING_FOR_QR_SCAN:
+            break
+            
+        status, token = await ps.check_qr_login_status(user_id)
+        
+        if status == "success":
+            await message.edit_caption(caption="✅ **ВХОД ВЫПОЛНЕН!**\n\nПродолжаю решение теста...", parse_mode="Markdown")
+            
+            # Обновляем токен в БД если получили новый
+            if token:
+                db_local.update_user(user_id, token_mos=token)
+            
+            # Продолжаем решение
+            data = await state.get_data()
+            params = data.get('solve_params')
+            if params:
+                # Здесь вызываем solve_test повторно, он подхватит существующий браузер
+                # Но для простоты реализации в этом прототипе — мы просто 
+                # перекинем пользователя обратно на запуск, 
+                # где parser.solve_test увидит активный браузер в self.active_browsers
+                await state.set_state(BotStates.HOMEWORK_VIEW)
+                # Имитируем нажатие кнопки Старт
+                # (код ниже аналогичен process_ai_start_solve, но без первичного лоадинга)
+                # Для удобства просто рекурсивно вызовем логику или попросим нажать кнопку снова.
+                # Лучше — автоматически запустить.
+                class FakeCall:
+                    def __init__(self, uid, msg):
+                        self.from_user = type('obj', (object,), {'id': uid})
+                        self.message = msg
+                        self.data = f"start_solve:{params['hw_id']}:{params['accuracy']}:{params['mode']}:{params['mins']}:{params['date_str']}"
+                    async def answer(self): pass
+                
+                await process_ai_start_solve(FakeCall(user_id, message), state)
+            return
+            
+        elif status in ["timeout", "expired", "error"]:
+            await message.edit_caption(caption=f"❌ **ОШИБКА:** Тайм-аут или сессия закрыта. Попробуйте еще раз.", parse_mode="Markdown")
+            await state.set_state(BotStates.HOMEWORK_VIEW)
+            return
+
+    await message.edit_caption(caption="❌ **ВРЕМЯ ИСТЕКЛО!** QR-код больше недействителен.", parse_mode="Markdown")
+    await ps.close_qr_session(user_id)
+    await state.set_state(BotStates.HOMEWORK_VIEW)
+
+@dp.callback_query(F.data.startswith("attach_"))
+async def process_attach_portal(call: types.CallbackQuery, state: FSMContext):
+    if call.data == "attach_no":
+        await call.message.edit_reply_markup(reply_markup=None)
+        await call.answer("Ок, скриншот не будет прикреплен.")
+        return
+        
+    parts = call.data.split(":")
+    hw_id = parts[1]
+    date_str = parts[2]
+    
+    await call.message.edit_caption(caption=call.message.caption + "\n\n⏳ *Прикрепляю к порталу...*", parse_mode="Markdown")
+    
+    data = await state.get_data()
+    screenshot_path = data.get('last_screenshot')
+    
+    if not screenshot_path or not os.path.exists(screenshot_path):
+        await call.message.edit_caption(caption=call.message.caption.split("⏳")[0] + "\n\n❌ **Ошибка:** Скриншот решения не найден.", parse_mode="Markdown", reply_markup=None)
+        return
+
+    success, result_msg = await parser.attach_screenshot_to_homework(
+        call.from_user.id, hw_id, date_str, screenshot_path
     )
-    await message.answer(text, parse_mode="Markdown")
+    
+    if success:
+        await call.message.edit_caption(caption=call.message.caption.split("⏳")[0] + f"\n\n✅ **{result_msg}**", parse_mode="Markdown", reply_markup=None)
+    else:
+        await call.message.edit_caption(caption=call.message.caption.split("⏳")[0] + f"\n\n❌ **Ошибка:** {result_msg}\nПопробуйте вручную.", parse_mode="Markdown", reply_markup=None)
+        
+    await state.set_state(BotStates.HOMEWORK_VIEW)
+    await call.answer(result_msg)
 
 # ─── CALLBACKS ───
 
 @dp.callback_query(F.data == "back_to_main")
-async def back_to_main(call: types.CallbackQuery, state: FSMContext):
+@dp.message(F.text == "🔙 НАЗАД")
+@dp.message(F.text == "🏠 МЕНЮ")
+async def back_to_main(event: types.Message | types.CallbackQuery, state: FSMContext):
+    current_state = await state.get_state()
+    
+    # Если нажали "МЕНЮ", всегда идем в главное меню
+    if isinstance(event, types.Message) and event.text == "🏠 МЕНЮ":
+        await state.set_state(BotStates.MAIN_MENU)
+        await event.answer("🏠 ГЛАВНОЕ МЕНЮ:", reply_markup=get_main_menu_kb())
+        return
+
+    if current_state == BotStates.HOMEWORK_VIEW:
+        # Если мы в просмотре ДЗ, назад идет к выбору дня
+        data = await state.get_data()
+        offset = data.get('week_offset', 0)
+        text = "📅 ВЫБЕРИТЕ ДЕНЬ:"
+        kb = get_days_kb(offset, prefix="manual")
+        
+        if isinstance(event, types.CallbackQuery):
+            await event.message.edit_text(text, reply_markup=kb)
+        else:
+            await event.answer(text, reply_markup=kb)
+        await state.set_state(BotStates.DAY_SELECTION)
+        return
+
+    # Обычный возврат в меню
     await state.set_state(BotStates.MAIN_MENU)
-    try: await call.message.edit_text("🏠 ГЛАВНОЕ МЕНЮ:", reply_markup=get_main_menu_kb())
-    except: await call.message.answer("🏠 ГЛАВНОЕ МЕНЮ:", reply_markup=get_main_menu_kb())
+    text = "🏠 ГЛАВНОЕ МЕНЮ:"
+    kb = get_main_menu_kb()
+    
+    if isinstance(event, types.CallbackQuery):
+        try: 
+            await event.message.delete()
+            await event.message.answer(text, reply_markup=kb)
+        except: 
+            await event.message.answer(text, reply_markup=kb)
+    else:
+        await event.answer(text, reply_markup=kb)
+
+@dp.message(BotStates.HOMEWORK_VIEW, F.text.startswith("✅") | F.text.startswith("❌"))
+async def process_hw_toggle_text(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    btn_map = data.get('hw_btn_map', {})
+    
+    task_info = btn_map.get(message.text)
+    if not task_info:
+        await message.answer("⚠️ Ошибка: Кнопка не распознана. Обновите список ДЗ.")
+        return
+        
+    user = db.get_user(message.from_user.id)
+    is_now_done = db.is_hw_completed(user['user_id'], task_info['date'], task_info['hash'])
+    
+    if is_now_done:
+        db.unmark_hw_completed(user['user_id'], task_info['date'], task_info['hash'])
+        await message.answer(f"🔄 Возвращено: {task_info['subject']}")
+    else:
+        db.mark_hw_completed(user['user_id'], task_info['date'], task_info['hash'])
+        await message.answer(f"✅ Готово: {task_info['subject']}")
+        
+    # Обновляем вид
+    await show_day_homework(message, user, task_info['date'], state, is_callback=False)
+
+@dp.message(F.text == "🧠 РЕШИТЬ ВСЁ [ЦДЗ]")
+@dp.message(BotStates.HOMEWORK_VIEW, F.text == "🧠 РЕШИТЬ ВСЁ [ЦДЗ]")
+async def process_batch_solve_text_redirect(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    date_str = data.get('current_view_date')
+    if not date_str: return
+    await message.answer(f"🚀 ВСЁ ЦДЗ ({date_str}): Выберите точность решения:", 
+                        reply_markup=get_solve_accuracy_kb("all", date_str, is_batch=True))
+
+@dp.message(F.text == "🔍 ВЫБОРОЧНО [ЦДЗ]")
+@dp.message(BotStates.HOMEWORK_VIEW, F.text == "🔍 ВЫБОРОЧНО [ЦДЗ]")
+async def process_selective_solve_text_redirect(message: types.Message, state: FSMContext):
+    await process_selective_solve_logic(message, state)
+
+async def process_selective_solve_logic(event: types.Message | types.CallbackQuery, state: FSMContext, override_date: Optional[str] = None, is_edit: bool = False):
+    data = await state.get_data()
+    date_str = override_date or data.get('current_view_date')
+    if not date_str:
+        # Пытаемся определить дату (сегодня или завтра в зависимости от времени)
+        now = datetime.now()
+        if now.hour >= 15:
+            d = now + timedelta(days=1)
+            # Пропуск выходных для дефолта
+            if d.weekday() == 5: d += timedelta(days=2)
+            elif d.weekday() == 6: d += timedelta(days=1)
+        else:
+            d = now
+            if d.weekday() == 5: d += timedelta(days=2)
+            elif d.weekday() == 6: d += timedelta(days=1)
+        date_str = d.strftime('%Y-%m-%d')
+        await state.update_data(current_view_date=date_str)
+    
+    user_id = event.from_user.id
+    user = db.get_user(user_id)
+    ps = ParserService()
+    
+    # Загружаем и домашку, и расписание для кросс-чека
+    hw_mesh_id = user.get('mesh_id')
+    homeworks = await ps.get_mosreg_homework(user['token_mos'], user['student_id'], date_str, mesh_id=hw_mesh_id)
+    schedule = await ps.get_mosreg_schedule(user['token_mos'], user['student_id'], date_str, mesh_id=hw_mesh_id)
+    
+    logger.info(f"Selective solve: found {len(schedule or [])} lessons and {len(homeworks or [])} homeworks for {date_str}")
+    
+    kb = InlineKeyboardBuilder()
+    found_any = False
+    added_subjects = set()
+    
+    for item in (schedule or []):
+        subj_name = item['subject'].lower().strip()
+        # Ищем ДЗ для этого предмета из расписания
+        hw = next((h for h in homeworks if h['subject'].lower().strip() in subj_name or subj_name in h['subject'].lower().strip()), None)
+        
+        logger.info(f"Checking subject: {subj_name}, homework found: {hw is not None}")
+        
+        if hw and hw['subject'] not in added_subjects:
+            desc = hw.get('description', '').strip()
+            url_match = re.search(r'https?://\S+', desc)
+            url = url_match.group(0) if url_match else ""
+            
+            hw_type, _ = classify_hw(desc, url)
+            logger.info(f"Subject {hw['subject']} type: {hw_type}, desc: {desc[:50]}")
+            
+            # Проверяем наличие ЦДЗ
+            if hw_type == "тест":
+                kb.button(text=f"🔹 {hw['subject']}", callback_data=f"ai_select_subj:{hw['id']}:{date_str}")
+                found_any = True
+                added_subjects.add(hw['subject'])
+            
+    msg = event.message if isinstance(event, types.CallbackQuery) else event
+    
+    if not found_any:
+        await msg.answer("ℹ️ На этот день не найдено подходящих ЦДЗ для автоматического решения.")
+        return
+
+    kb.adjust(1)
+    text = "🎯 Выберите конкретное ЦДЗ для решения:"
+    
+    if is_edit:
+        await msg.edit_text(text, reply_markup=kb.as_markup())
+    else:
+        await msg.answer(text, reply_markup=kb.as_markup())
+
+@dp.message(BotStates.HOMEWORK_VIEW, F.text == "🔄 ОБНОВИТЬ")
+async def process_refresh_text(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    date_str = data.get('current_view_date')
+    if not date_str: return
+    
+    user = db.get_user(message.from_user.id)
+    await message.answer("🔄 Обновляю список заданий...")
+    await show_day_homework(message, user, date_str, state, is_callback=False)
 
 @dp.callback_query(F.data.startswith("back_to_weeks_"))
 async def back_to_weeks(call: types.CallbackQuery, state: FSMContext):
@@ -272,64 +1166,63 @@ async def back_to_days_handler(call: types.CallbackQuery, state: FSMContext):
     data = await state.get_data()
     await call.message.edit_text("📅 ВЫБЕРИТЕ ДЕНЬ:", reply_markup=get_days_kb(data.get('week_offset', 0), prefix="manual"))
 
-@dp.callback_query(StateFilter(BotStates.WEEK_SELECTION, BotStates.AUTO_SOLVE_WEEK), F.data.contains("_prev") | F.data.contains("_curr"))
+@dp.callback_query(StateFilter(BotStates.WEEK_SELECTION, BotStates.AUTO_SOLVE_WEEK), F.data.contains("_prev") | F.data.contains("_curr") | F.data.contains("_next"))
 async def week_select(call: types.CallbackQuery, state: FSMContext):
     prefix = "manual" if "manual" in call.data else "auto"
-    offset = 0 if "curr" in call.data else -1
+    if "_curr" in call.data:
+        offset = 0
+    elif "_next" in call.data:
+        offset = 1
+    else: # _prev
+        offset = -1
     await state.update_data(week_offset=offset)
     await state.set_state(BotStates.DAY_SELECTION if prefix == "manual" else BotStates.AUTO_SOLVE_DAY)
+    # Suggestion: Убрали лишнее текстовое сообщение, Reply-клавиатура и так на месте
     await call.message.edit_text("📅 ВЫБЕРИТЕ ДЕНЬ:", reply_markup=get_days_kb(offset, prefix=prefix))
 
 @dp.callback_query(F.data.startswith("manual_"))
 @dp.callback_query(F.data.startswith("refresh_day_"))
-async def manual_day_select(call: types.CallbackQuery, state: FSMContext):
-    if "refresh" in call.data:
+@dp.callback_query(F.data.startswith("refresh_hw_list:"))
+async def process_refresh_day(call: types.CallbackQuery, state: FSMContext):
+    if ":" in call.data: # формат refresh_hw_list:date
+        date_str = call.data.split(":")[1]
+        is_refresh = True
+    else: # форматы manual_date или refresh_day_date_source
         parts = call.data.split("_")
-        date_str = parts[2]
-    else:
-        date_str = call.data.split("_")[1]
+        date_str = parts[1] if "manual" in call.data else parts[2]
+        is_refresh = "refresh" in call.data
         
     await state.update_data(selected_date=date_str)
     user = db.get_user(call.from_user.id)
+    await show_day_homework(call.message, user, date_str, state, is_callback=True)
+
+@dp.callback_query(F.data.startswith("hw_done:"))
+async def process_hw_done(callback: types.CallbackQuery, state: FSMContext):
+    # data: hw_done:date:hash
+    parts = callback.data.split(':')
+    date_str = parts[1]
+    hw_hash = parts[2]
     
-    # 1. Получаем данные
-    try:
-        schedule = await parser.get_mosreg_schedule(user['token_mos'], user['student_id'], date_str, mesh_id=user.get('mesh_id'))
-        homeworks = await parser.get_mosreg_homework(user['token_mos'], user['student_id'], date_str, mesh_id=user.get('mesh_id'))
-    except MosregAuthError:
-        await call.message.edit_text(
-            "⚠️ ВАША СЕССИЯ ИСТЕКЛА!\n\nТОКЕН БОЛЬШЕ НЕ ДЕЙСТВИТЕЛЕН. ПОЖАЛУЙСТА, ОБНОВИТЕ ЕГО:\n"
-            "🔗 [ПОЛУЧИТЬ НОВЫЙ ТОКЕН](https://authedu.mosreg.ru/v2/token/refresh)\n\n"
-            "ПРОСТО ОТПРАВЬТЕ НОВЫЙ ТОКЕН МНЕ.",
-            reply_markup=InlineKeyboardBuilder().button(text="🔙 В МЕНЮ", callback_data="back_to_main").as_markup(),
-            parse_mode="Markdown"
-        )
-        return
+    user = db.get_user(callback.from_user.id)
+    # ПЕРЕКЛЮЧЕНИЕ: Если уже сделано — убираем, если нет — ставим
+    is_now_done = db.is_hw_completed(user['user_id'], date_str, hw_hash)
     
-    text = f"📍 РАСПИСАНИЕ НА {date_str}:\n🗓️ ЗАДАНО ЦДЗ: {len(homeworks)}\n━━━━━━━━━━━━━━━\n\n"
-    
-    if not schedule:
-        text += "💨 УРОКОВ НЕ НАЙДЕНО."
+    if is_now_done:
+        db.unmark_hw_completed(user['user_id'], date_str, hw_hash)
+        await callback.answer("❌ Задание отмечено как НЕВЫПОЛНЕННОЕ")
     else:
-        for i, item in enumerate(schedule, 1):
-            room = f"КАБ. № {item['room']}" if item['room'] else "КАБ. НЕ УКАЗАН"
-            text += f"{i} УРОК {item['time']} {room}\n"
-            text += f"{item['subject'].upper()}\n"
-            
-            # Ищем домашку для этого предмета
-            hw_item = next((h for h in homeworks if h['subject'].lower() in item['subject'].lower() or item['subject'].lower() in h['subject'].lower()), None)
-            if hw_item:
-                text += "📝 ДОМАШНЕЕ ЗАДАНИЕ (ЦДЗ):\n"
-                desc = hw_item['description'][:100] + "..." if len(hw_item['description']) > 100 else hw_item['description']
-                text += f"   ┗ {desc.upper()}\n"
-            else:
-                text += "📝 ДОМАШНЕЕ ЗАДАНИЕ:\n"
-                text += "   ┗ БЕЗ Д/З\n"
-            text += "━━━━━━━━━━━━━━━\n"
-    
-    text += f"\n🕒 ОБНОВЛЕНО В {datetime.now().strftime('%H:%M:%S')}"
-    
-    await call.message.edit_text(text, reply_markup=get_hw_action_kb(date_str))
+        db.mark_hw_completed(user['user_id'], date_str, hw_hash)
+        await callback.answer("✅ Задание выполнено!")
+        
+    # Обновляем вид
+    await show_day_homework(callback.message, user, date_str, state, is_callback=True)
+
+@dp.callback_query(F.data.startswith("refresh_hw_list:"))
+async def refresh_hw_list(call: types.CallbackQuery, state: FSMContext):
+    date_str = call.data.split(":")[1]
+    user = db.get_user(call.from_user.id)
+    await call.answer("🔄 Обновляю данные...")
+    await show_day_homework(call.message, user, date_str, state, is_callback=True)
 
 @dp.callback_query(F.data.startswith("batch_solve_pre_"))
 async def batch_solve_pre_handler(call: types.CallbackQuery):
