@@ -17,16 +17,40 @@ class MosregAuthError(Exception):
     pass
 
 class ParserService:
-    def __init__(self):
+    def __init__(self, session=None):
         self.ai = AIService()
         self.db = Database()
+        self.session = session
+        self._cache = {} # (key): {data: ..., expiry: ...}
         self.base_headers = {
             'User-Agent': 'Mozilla/5.0 (Linux; Android 13; SM-A525F Build/TP1A.220624.014; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/116.0.0.0 Mobile Safari/537.36',
             'Accept': 'application/json, text/plain, */*',
             'Accept-Language': 'ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7',
             'Client-Type': 'diary-mobile',
-            'X-Mes-Subsystem': 'familymp'
+            'X-Mes-Subsystem': 'family'
         }
+
+    def _get_from_cache(self, key):
+        if key in self._cache:
+            entry = self._cache[key]
+            if datetime.now() < entry['expiry']:
+                logger.info(f"Using cached data for {key}")
+                return entry['data']
+            else:
+                del self._cache[key]
+        return None
+
+    def _set_to_cache(self, key, data, ttl_seconds=600):
+        self._cache[key] = {
+            'data': data,
+            'expiry': datetime.now() + timedelta(seconds=ttl_seconds)
+        }
+
+    async def _get_session(self):
+        if self.session and not self.session.closed:
+            return self.session
+        self.session = aiohttp.ClientSession()
+        return self.session
 
     def decode_jwt(self, token):
         """Декодирует JWT payload."""
@@ -47,265 +71,294 @@ class ParserService:
         headers = self.base_headers.copy()
         headers['Authorization'] = f'Bearer {access_token}'
         headers['auth-token'] = access_token
-        async with aiohttp.ClientSession() as session:
-            try:
-                async with session.get(url, headers=headers, timeout=15) as resp:
-                    if resp.status in [200, 201]:
-                        new_token = await resp.text()
-                        new_token = new_token.strip().strip('"')
-                        if new_token.startswith('eyJ'):
-                            logger.info("Token refreshed successfully")
-                            return new_token
-                    else:
-                        logger.warning(f"Refresh failed: {resp.status}")
-            except Exception as e:
-                logger.error(f"Token refresh error: {e}")
+        session = await self._get_session()
+        try:
+            async with session.get(url, headers=headers, timeout=15) as resp:
+                if resp.status in [200, 201]:
+                    new_token = await resp.text()
+                    new_token = new_token.strip().strip('"')
+                    if new_token.startswith('eyJ'):
+                        logger.info("Token refreshed successfully")
+                        return new_token
+                else:
+                    logger.warning(f"Refresh failed: {resp.status}")
+        except Exception as e:
+            logger.error(f"Token refresh error: {e}")
         return None
 
-    async def _activate_session(self, access_token):
+    async def _activate_session(self, access_token, subsystem='familymp'):
         """
         Обязательная активация сессии через profile_info (handshake).
         Без этого API возвращает 403 Forbidden.
         """
-        url = "https://myschool.mosreg.ru/acl/api/users/profile_info"
         headers = self.base_headers.copy()
+        # Пробуем разные вариации заголовка токена
         headers['auth-token'] = access_token
+        headers['Auth-Token'] = access_token
+        
+        urls = [
+            'https://myschool.mosreg.ru/acl/api/users/profile_info',
+            'https://myschool.mosreg.ru/acl/api/v1/auth/activate',
+            'https://api.myschool.mosreg.ru/educational/v1/profile',
+            'https://authedu.mosreg.ru/api/family/web/v1/profile' # Из oms/lib
+        ]
+        
         headers['Authorization'] = f'Bearer {access_token}'
-        async with aiohttp.ClientSession() as session:
+        headers['X-Mes-Subsystem'] = subsystem
+        session = await self._get_session()
+        
+        for url in urls:
             try:
-                async with session.get(url, headers=headers, timeout=15) as resp:
-                    logger.info(f"Session activation: status={resp.status}")
+                # Для web-версии иногда нужен специфический Referer
+                if 'family/web' in url:
+                    headers['Referer'] = 'https://myschool.mosreg.ru/'
+                
+                async with session.get(url, headers=headers, timeout=10) as resp:
+                    logger.info(f"Handshake [{subsystem}] @ {url}: status={resp.status}")
                     if resp.status == 200:
-                        data = await resp.json()
-                        logger.info(f"Session activated")
-                        return data
+                        return await resp.json() if "application/json" in resp.headers.get("Content-Type", "").lower() else {"status":"ok"}
             except Exception as e:
-                logger.error(f"Session activation error: {e}")
+                logger.error(f"Handshake error [{subsystem}] @ {url}: {e}")
         return None
 
     async def fetch_mosreg_profile(self, access_token):
         """
         Получает профиль через API и токен.
         Приоритет: 
-        1. Имя из самого токена (JWT) - надежнее всего.
-        2. Прямой запрос к API профиля.
-        3. Рукопожатие и повторный запрос.
-        4. Экстракция из данных активации.
+        1. Имя из самого токена (JWT) - надежнее всего для ФИО.
+        2. Прямой запрос к API профиля для получения класса.
+        3. Рукопожатие и повторный запрос через разные subsystems.
         """
         user_info = {"first_name": "", "last_name": "", "grade": "", "student_id": ""}
         
-        # Шаг 1: Декодируем JWT для получения имени (быстро и надежно)
+        # Шаг 1: Декодируем JWT для получения имени
         try:
-            import base64
-            parts = access_token.split('.')
-            if len(parts) == 3:
-                payload = parts[1]
-                payload += '=' * (-len(payload) % 4)
-                decoded = json.loads(base64.b64decode(payload).decode('utf-8'))
-                logger.info(f"JWT Payload keys: {list(decoded.keys())}")
-                
-                # Ищем имя в разных возможных полях JWT
+            decoded = self.decode_jwt(access_token)
+            if decoded:
+                # В JWT обычно лежит полное имя (name или given_name)
                 raw_name = decoded.get('name') or decoded.get('given_name') or decoded.get('fname') or decoded.get('first_name')
                 if raw_name:
-                    user_info["first_name"] = str(raw_name).split()[0]
-                    logger.info(f"Extracted name from JWT: {user_info['first_name']}")
-                else:
-                    logger.warning(f"No name found in JWT. Available keys: {list(decoded.keys())}")
+                    parts = str(raw_name).strip().split(' ', 1)
+                    if len(parts) > 1:
+                        user_info["last_name"] = parts[0]
+                        user_info["first_name"] = parts[1]
+                    else:
+                        user_info["first_name"] = parts[0]
+                    logger.info(f"Extracted name from JWT: {user_info['first_name']} {user_info['last_name']}")
                 
+                # sub обычно содержит ID пользователя
                 user_info["student_id"] = str(decoded.get('sub', '') or decoded.get('person_id', ''))
         except Exception as e:
             logger.warning(f"JWT decode error: {e}")
 
+        # Подготовка заголовков
         headers = self.base_headers.copy()
-        headers['Authorization'] = f'Bearer {access_token}'
         headers['auth-token'] = access_token
-        headers['X-Mes-Subsystem'] = 'family'
+        headers['Authorization'] = f'Bearer {access_token}'
+        headers['Access-Token'] = access_token
         headers['Referer'] = 'https://myschool.mosreg.ru/'
-        headers['Origin'] = 'https://myschool.mosreg.ru'
         
-        async with aiohttp.ClientSession() as session:
+        session = await self._get_session()
+        
+        # Шаг 2: Пробуем базовые эндпоинты профиля
+        profile_endpoints = [
+            ("https://authedu.mosreg.ru/api/family/mobile/v1/profile", "family"),
+            ("https://authedu.mosreg.ru/api/family/mobile/v1/profile", "familymp"),
+            ("https://authedu.mosreg.ru/api/family/web/v1/profile", "familyweb"),
+            ("https://api.myschool.mosreg.ru/family/mobile/v1/profile", "family"),
+            ("https://api.myschool.mosreg.ru/family/mobile/v1/profile", "familymp"),
+            ("https://api.myschool.mosreg.ru/family/mobile/v1/profile", "educational")
+        ]
+
+        # Мы не делаем активацию сразу, а будем делать ее внутри цикла для каждой подсистемы
+        activation_data = None
+
+        for url, sub in profile_endpoints:
+            headers['X-Mes-Subsystem'] = sub
             try:
-                # Шаг 2: Пробуем API профиля (для получения класса и фамилии)
-                async with session.get("https://authedu.mosreg.ru/api/family/mobile/v1/profile", headers=headers, timeout=5) as resp:
-                    if resp.status == 200:
-                        data = await resp.json()
-                        children = data.get('children', [])
-                        if children:
-                            p = self._parse_profile(children[0])
-                            user_info.update({k: v for k, v in p.items() if v})
-                            return user_info
-
-                # Шаг 3: Рукопожатие и активация
-                activation = await self._activate_session(access_token)
+                # Сначала активируем подсистему
+                res = await self._activate_session(access_token, subsystem=sub)
+                if res and not activation_data:
+                    activation_data = res
                 
-                # Повторный запрос после активации
-                async with session.get("https://authedu.mosreg.ru/api/family/mobile/v1/profile", headers=headers, timeout=5) as resp:
+                async with session.get(url, headers=headers, timeout=5) as resp:
+                    logger.info(f"Profile fetch from {url} [{sub}]: status={resp.status}")
                     if resp.status == 200:
-                        data = await resp.json()
-                        children = data.get('children', [])
-                        if children:
-                            p = self._parse_profile(children[0])
-                            user_info.update({k: v for k, v in p.items() if v})
-                            return user_info
-
-                # Шаг 3.5: Пробуем новый API (api.myschool) согласно OctoDiary
-                try:
-                    async with session.get("https://api.myschool.mosreg.ru/family/mobile/v1/profile", headers=headers, timeout=5) as resp:
-                        logger.info(f"Step 3.5 (api.myschool) status: {resp.status}")
-                        if resp.status == 200:
+                        if "application/json" in resp.headers.get("Content-Type", "").lower():
                             data = await resp.json()
-                            children = data.get('children', [])
-                            if children:
-                                p = self._parse_profile(children[0])
-                                # Если имя нашлось, обновляем и возвращаем
-                                if p.get('first_name'):
-                                    user_info.update({k: v for k, v in p.items() if v})
-                                    return user_info
-                except Exception as e:
-                    logger.warning(f"Step 3.5 error: {e}")
-
-                # Шаг 4: Пробуем API пользователей /me (обычно содержит имя)
-                try:
-                    async with session.get("https://myschool.mosreg.ru/acl/api/users/me", headers=headers, timeout=5) as resp:
-                        logger.info(f"Step 4 (/users/me) status: {resp.status}")
-                        if resp.status == 200:
-                            p = await resp.json()
-                            logger.info(f"Got profile from /users/me: {p}")
-                            user_info["first_name"] = user_info["first_name"] or p.get('first_name') or p.get('firstname') or p.get('name')
-                            user_info["last_name"] = user_info["last_name"] or p.get('last_name') or p.get('lastname')
-                            user_info["student_id"] = user_info["student_id"] or str(p.get('id') or p.get('person_id') or '')
-                except Exception as e:
-                    logger.warning(f"Step 4 error: {e}")
-
-                # Шаг 5: Пробуем API /users/profile
-                if not user_info["first_name"]:
-                    try:
-                        async with session.get("https://myschool.mosreg.ru/acl/api/users/profile", headers=headers, timeout=5) as resp:
-                            logger.info(f"Step 5 (/users/profile) status: {resp.status}")
-                            if resp.status == 200:
-                                p = await resp.json()
-                                logger.info(f"Got profile from /users/profile: {p}")
-                                user_info["first_name"] = p.get('first_name') or p.get('firstname')
-                                user_info["last_name"] = p.get('last_name') or p.get('lastname')
-                                user_info["student_id"] = user_info["student_id"] or str(p.get('id') or p.get('person_id') or '')
-                    except Exception as e:
-                        logger.warning(f"Step 5 error: {e}")
-                
-                # Шаг 6: Использование данных из активации
-                if activation and isinstance(activation, list):
-                    for p in activation:
-                        if p.get('type') in ['StudentProfile', 'Learner', 'Profile']:
-                            logger.info(f"Activation item: {p}")
-                            user_info["first_name"] = user_info["first_name"] or p.get('first_name') or p.get('firstname')
-                            user_info["student_id"] = user_info["student_id"] or str(p.get('id') or p.get('person_id') or '')
-
-                # Шаг 7: Если есть student_id но нет имени, пробуем API персоны
-                if user_info["student_id"] and not user_info["first_name"]:
-                    try:
-                        pid = user_info["student_id"]
-                        async with session.get(f"https://myschool.mosreg.ru/api/person/v1/persons/{pid}", headers=headers, timeout=5) as resp:
-                            logger.info(f"Step 7 (/persons/{pid}) status: {resp.status}")
-                            if resp.status == 200:
-                                p = await resp.json()
-                                logger.info(f"Got profile from /persons: {p}")
-                                user_info["first_name"] = p.get('first_name') or p.get('firstname') or p.get('name', '').split()[0]
-                                user_info["last_name"] = p.get('last_name') or p.get('lastname')
-                    except Exception as e:
-                        logger.warning(f"Step 7 error: {e}")
-                
-                # Финальная проверка: если имя так и не найдено
-                if not user_info["first_name"]:
-                    user_info["first_name"] = "Пользователь"
-                
-                if user_info["student_id"]:
-                    return user_info
-                
-                raise MosregAuthError("Не удалось получить профиль")
-            except MosregAuthError:
-                raise
+                            # Ищем в profile и в children[0], объединяем их
+                            profile = data.get('profile', {})
+                            child = data.get('children', [{}])[0] if data.get('children') else {}
+                            
+                            # Приоритизируем child, так как там есть группы и школа
+                            prof = {**profile, **child}
+                            logger.info(f"Merged profile data for user {user_info.get('first_name')}: {list(prof.keys())}")
+                            
+                            if prof:
+                                p = self._parse_profile(prof)
+                                # Обновляем данные, не затирая полноту имени из JWT если оно уже есть
+                                for k, v in p.items():
+                                    if v and (not user_info.get(k) or user_info[k] in ["", "Пользователь"]):
+                                        user_info[k] = v
+                                logger.info(f"Updated profile data from {url} [{sub}]")
+                                if user_info.get('grade'): # Если уже нашли класс, можно не продолжать этот цикл
+                                    break
             except Exception as e:
-                logger.error(f"Fetch profile error: {e}")
-        return None
+                logger.debug(f"Failed profile fetch at {url} [{sub}]: {e}")
+
+        # Шаг 3: Fallback на данные из активации (если API профиля не ответили)
+        if activation_data and isinstance(activation_data, list) and not user_info.get('student_id'):
+            for p in activation_data:
+                if p.get('type') in ['StudentProfile', 'Learner', 'Profile']:
+                    user_info["student_id"] = str(p.get('id') or p.get('person_id') or '')
+                    if not user_info["first_name"]:
+                        user_info["first_name"] = p.get('first_name') or p.get('firstname') or ''
+
+        # Шаг 4: Если имя все еще не найдено
+        if not user_info.get("first_name"):
+            user_info["first_name"] = "Пользователь"
+            
+        if user_info.get("student_id"):
+            return user_info
+        
+        # Если даже ID не нашли, это ошибка
+        raise MosregAuthError("Не удалось получить базовые данные профиля. Возможно, токен недействителен.")
+
 
     def _parse_profile(self, child_data):
-        # Приоритизируем person_id для eventcalendar/homework API
-        sid = child_data.get('person_id') or child_data.get('student_id') or child_data.get('id', '')
+        # Приоритизируем числовой 'id' для Mosreg api/family/mobile
+        sid = child_data.get('id') or child_data.get('student_id') or child_data.get('person_id') or ''
+        # mesh_id (contingent_guid) часто используется в веб-версии и для ДЗ
+        mesh_id = child_data.get('contingent_guid') or child_data.get('mesh_id') or ''
+        
+        # Поиск класса
+        grade = str(child_data.get('class_name') or '')
+        if not grade:
+            # В familymp класс часто лежит в списке groups
+            groups = child_data.get('groups', [])
+            if isinstance(groups, list) and len(groups) > 0:
+                # Обычно первая группа - это основной класс
+                grade = str(groups[0].get('name') or '')
+
         return {
             "first_name": child_data.get('first_name') or child_data.get('firstname') or '',
             "last_name": child_data.get('last_name') or child_data.get('lastname') or '',
-            "grade": str(child_data.get('class_name') or ''),
-            "student_id": str(sid)
+            "grade": grade,
+            "student_id": str(sid),
+            "mesh_id": str(mesh_id)
         }
 
-    async def get_mosreg_schedule(self, access_token, student_id, date_str=None, retry_auth=True):
-        """
-        Получает расписание уроков (событий) для отображения пользователю.
-        retry_auth: если True, попробует активировать сессию при 401.
-        """
-        if not student_id: return []
-        if not date_str: date_str = datetime.now().strftime('%Y-%m-%d')
-        
-        url = (f"https://authedu.mosreg.ru/api/eventcalendar/v1/api/events"
-               f"?person_ids={student_id}&begin_date={date_str}&end_date={date_str}&expand=homework")
+    async def get_mosreg_schedule(self, access_token, student_id, date_str, mesh_id=None):
+        """Получает расписание через Mosreg API с использованием системы Fallback."""
+        cache_key = f"schedule_{student_id}_{date_str}_{mesh_id}"
+        cached = self._get_from_cache(cache_key)
+        if cached: return cached
+
         headers = self.base_headers.copy()
         headers['Authorization'] = f'Bearer {access_token}'
-        headers['auth-token'] = access_token
-        headers['X-Mes-Subsystem'] = 'family'
         headers['Referer'] = 'https://myschool.mosreg.ru/'
-        headers['Origin'] = 'https://myschool.mosreg.ru'
         
-        async with aiohttp.ClientSession() as session:
+        session = await self._get_session()
+        
+        # Список эндпоинтов (url, subsystem, id_param, apikey_needed, use_guid)
+        endpoints = [
+            ("https://authedu.mosreg.ru/api/eventcalendar/v1/api/events", "familyweb", "personId", False, False),
+            ("https://api.myschool.mosreg.ru/family/mobile/v1/schedule/short", "familymp", "student_id", False, False),
+            ("https://authedu.mosreg.ru/api/eventcalendar/v1/api/events", "family", "person_ids", True, True),
+            ("https://api.myschool.mosreg.ru/family/mobile/v1/schedule", "familymp", "student_id", False, False)
+        ]
+        
+        all_items = []
+        for i, (base_url, sub, id_param, needs_apikey, use_guid) in enumerate(endpoints):
+            cur_id = mesh_id if use_guid and mesh_id else student_id
+            if not cur_id: continue
+
             try:
-                async with session.get(url, headers=headers, timeout=15) as resp:
+                # Формируем URL
+                if "schedule/short" in base_url:
+                    url = f"{base_url}?{id_param}={cur_id}&from={date_str}&to={date_str}"
+                elif "eventcalendar" in base_url:
+                    begin_label = "begin_date" if id_param == "person_ids" else "beginDate"
+                    end_label = "end_date" if id_param == "person_ids" else "endDate"
+                    url = f"{base_url}?{id_param}={cur_id}&{begin_label}={date_str}&{end_label}={date_str}&expand=homework,marks,absence_reason_id"
+                else:
+                    url = f"{base_url}?{id_param}={cur_id}&date={date_str}"
+                
+                h = headers.copy()
+                h['X-Mes-Subsystem'] = sub
+                if needs_apikey:
+                    h['apikey'] = '7ef6c62c-7b00-4796-96c6-2c7b00279619'
+                
+                await self._activate_session(access_token, subsystem=sub)
+                
+                async with session.get(url, headers=h, timeout=12) as resp:
+                    logger.info(f"Schedule fetch [{sub}] {url}: {resp.status}")
                     if resp.status == 200:
                         data = await resp.json()
-                        logger.info(f"Schedule API raw response (partial): {str(data)[:500]}")
-                        events = data.get('response', [])
-                        schedule = []
+                        events = data.get('response') or data.get('data') or data.get('payload') or []
+                        if not events and isinstance(data, list): events = data
                         
-                        # Если events пустой, возможно используется другой ключ или структура
-                        if not events and 'data' in data:
-                            events = data['data']
-                        
-                        for ev in events:
-                            # Проверяем тип события (обычно 1 - урок)
-                            # types: 1 - lesson, 2 - event, 3 - etc.
-                            # Но нам нужны любые учебные события
-                            subject = ev.get('subject_name') or ev.get('title') or ev.get('subject', {}).get('name', 'Урок')
-                            
-                            start = ev.get('start_at') or ev.get('begin_time') or ''
-                            end = ev.get('finish_at') or ev.get('end_time') or ''
-                            
-                            time_str = f"{start[11:16]} - {end[11:16]}" if (start and end) else "Время не указано"
+                        if events:
+                            for ev in events:
+                                subject = ev.get('subject_name') or ev.get('title') or ev.get('subject', {}).get('name', 'Урок')
+                                start = ev.get('start_at') or ev.get('begin_time') or ev.get('start_time') or ev.get('start', '')
+                                end = ev.get('finish_at') or ev.get('end_time') or ev.get('end', '')
                                 
-                            schedule.append({
-                                "subject": subject,
-                                "time": time_str,
-                                "room": ev.get('room_number') or ev.get('room') or '',
-                                "has_hw": bool(ev.get('homework')) or bool(ev.get('has_homework'))
-                            })
-                        
-                        # Сортируем по времени
-                        schedule.sort(key=lambda x: x['time'])
-                        
-                        # Если все еще пустой, пробуем v3/schedule
-                        if not schedule:
-                            schedule = await self.get_mosreg_schedule_v3(access_token, student_id, date_str)
+                                hw_data = ev.get('homework') or []
+                                hw_text = ""
+                                if isinstance(hw_data, list):
+                                    hw_text = "; ".join([h.get('description', '') for h in hw_data if h.get('description')])
+                                elif isinstance(hw_data, dict):
+                                    hw_text = hw_data.get('description', '')
+                                if not hw_text: hw_text = ev.get('homework_text') or ""
+                                
+                                room = ev.get('room_number') or ev.get('room_name') or '?'
+                                
+                                def format_time(t):
+                                    if not t: return ""
+                                    t = str(t)
+                                    if 'T' in t: return t.split('T')[1][:5]
+                                    if ' ' in t: # "2026-03-26 09:00:00"
+                                        try: return t.split(' ')[1][:5]
+                                        except: pass
+                                    if ':' in t:
+                                        parts = t.split(':')
+                                        if len(parts) >= 2:
+                                            hrs = parts[0][-2:].strip().zfill(2)
+                                            mns = parts[1][:2].strip().zfill(2)
+                                            return f"{hrs}:{mns}"
+                                    return t
+
+                                time_str = f"{format_time(start)}-{format_time(end)}"
+                                lesson_obj = {
+                                    'name': subject,
+                                    'subject': subject,
+                                    'time': time_str,
+                                    'hw': hw_text,
+                                    'room': room,
+                                    'id': ev.get('id') or ev.get('lesson_id')
+                                }
+                                
+                                if not any(x['name'] == subject and x['time'] == time_str for x in all_items):
+                                    all_items.append(lesson_obj)
                             
-                        return schedule
-                    
-                    elif resp.status == 401:
-                        error_body = await resp.text()
-                        logger.warning(f"401 in schedule: {error_body}")
-                        if retry_auth:
-                            logger.info("Retrying handshake...")
-                            await self._activate_session(access_token)
-                            return await self.get_mosreg_schedule(access_token, student_id, date_str, retry_auth=False)
+                            if all_items:
+                                logger.info(f"Schedule found {len(all_items)} items from {sub}")
+                                break # Нашли уроки, выходим из цикла эндпоинтов
+                    elif resp.status == 401 and i == len(endpoints) - 1:
                         raise MosregAuthError("Токен истек")
             except MosregAuthError:
                 raise
             except Exception as e:
-                logger.error(f"Schedule error: {e}")
+                logger.error(f"Schedule attempt failed [{sub}]: {e}")
+        
+        if all_items:
+            all_items.sort(key=lambda x: x['time'])
+            self._set_to_cache(cache_key, all_items)
+            return all_items
+        
+        # Last resort: try V3 API
+        logger.info(f"All standard fallbacks failed for user {student_id}. Trying V3 API.")
         return await self.get_mosreg_schedule_v3(access_token, student_id, date_str)
 
     async def get_mosreg_schedule_v3(self, access_token, student_id, date_str, retry_auth=True):
@@ -314,14 +367,22 @@ class ParserService:
         headers = self.base_headers.copy()
         headers['Authorization'] = f'Bearer {access_token}'
         headers['auth-token'] = access_token
-        headers['X-Mes-Subsystem'] = 'family'
         
-        async with aiohttp.ClientSession() as session:
+        session = await self._get_session()
+        subsystems = ['family', 'familymp', 'educational']
+        
+        for sub in subsystems:
+            headers['X-Mes-Subsystem'] = sub
             try:
+                # Активируем подсистему перед запросом
+                await self._activate_session(access_token, subsystem=sub)
+                
                 async with session.get(url, headers=headers, timeout=10) as resp:
                     if resp.status == 200:
+                        if "application/json" not in resp.headers.get("Content-Type", "").lower():
+                            return []
                         data = await resp.json()
-                        logger.info(f"Schedule V3 raw response (partial): {str(data)[:500]}")
+                        logger.info(f"Schedule V3 raw response (partial) [{sub}]: {str(data)[:500]}")
                         items = data.get('data', {}).get('items', [])
                         schedule = []
                         for item in items:
@@ -333,162 +394,37 @@ class ParserService:
                             })
                         return schedule
                     elif resp.status == 401:
-                        if retry_auth:
-                            await self._activate_session(access_token)
-                            return await self.get_mosreg_schedule_v3(access_token, student_id, date_str, retry_auth=False)
-                        raise MosregAuthError("Токен истек")
+                        if sub == subsystems[-1]:
+                            if retry_auth:
+                                await self._activate_session(access_token)
+                                return await self.get_mosreg_schedule_v3(access_token, student_id, date_str, retry_auth=False)
+                            raise MosregAuthError("Токен истек")
             except MosregAuthError:
                 raise
             except Exception as e:
-                logger.error(f"Schedule V3 error: {e}")
+                logger.error(f"Schedule V3 error [{sub}]: {e}")
         return []
 
-    async def get_mosreg_homework(self, access_token, student_id, date_str=None, retry_auth=True):
-        """Получает список ЦДЗ заданий с авто-восстановлением сессии."""
-        if not student_id: return []
-        if not date_str: date_str = datetime.now().strftime('%Y-%m-%d')
+    async def get_mosreg_homework(self, access_token, student_id, date_str=None, mesh_id=None):
+        """Получает домашние задания через существующую систему расписания (для совместимости с bot.py)"""
+        if not date_str:
+            from datetime import datetime
+            date_str = datetime.now().strftime('%Y-%m-%d')
+            
+        lessons = await self.get_mosreg_schedule(access_token, student_id, date_str, mesh_id=mesh_id)
         
-        url = f"https://authedu.mosreg.ru/api/family/mobile/v1/homeworks?student_id={student_id}&from={date_str}&to={date_str}"
-        headers = self.base_headers.copy()
-        headers['Authorization'] = f'Bearer {access_token}'
-        headers['auth-token'] = access_token
-        headers['X-Mes-Subsystem'] = 'family'
+        hw_results = []
+        if lessons:
+            for l in lessons:
+                if l.get('hw') and l['hw'] not in ['', 'без д/з', 'Нет заданий']:
+                    hw_results.append({
+                        "subject": l['name'],
+                        "description": l['hw'],
+                        "link": "" # Мосрег редко отдает прямые ссылки в этом эндпоинте
+                    })
         
-        async with aiohttp.ClientSession() as session:
-            try:
-                async with session.get(url, headers=headers, timeout=15) as resp:
-                    if resp.status == 200:
-                        data = await resp.json()
-                        hws = []
-                        for item in data:
-                            desc = item.get('description', '').lower()
-                            if 'цдз' in desc or 'тест' in desc or 'выполнить' in desc:
-                                hws.append({
-                                    "subject": item.get('subject_name', ''),
-                                    "description": item.get('description', ''),
-                                    "link": self._extract_url(item.get('description', ''))
-                                })
-                        return hws
-                    elif resp.status == 401:
-                        if retry_auth:
-                            logger.info("401 detected in homework, trying handshake retry...")
-                            await self._activate_session(access_token)
-                            return await self.get_mosreg_homework(access_token, student_id, date_str, retry_auth=False)
-                        raise MosregAuthError("Токен истек")
-            except MosregAuthError:
-                raise
-            except Exception as e:
-                logger.error(f"Homework error: {e}")
-        return []
-        """
-        Получает ЦДЗ через eventcalendar API с улучшенной фильтрацией.
-        """
-        if not student_id: return []
-        if not date_str: date_str = datetime.now().strftime('%Y-%m-%d')
-        
-        url = (f"https://authedu.mosreg.ru/api/eventcalendar/v1/api/events"
-               f"?person_ids={student_id}&begin_date={date_str}&end_date={date_str}&expand=homework")
-        headers = self.base_headers.copy()
-        headers['Authorization'] = f'Bearer {access_token}'
-        
-        async with aiohttp.ClientSession() as session:
-            try:
-                async with session.get(url, headers=headers, timeout=15) as resp:
-                    if resp.status == 200:
-                        data = await resp.json()
-                        homeworks = []
-                        events = data.get('response', [])
-                        
-                        # Ключевые слова для поиска ЦДЗ в тексте
-                        kw_pattern = r"(тест|цдз|выполнить|решить|интерактив|олимпиада)"
-                        
-                        for event in events:
-                            subject = event.get('subject_name') or event.get('title', 'Без предмета')
-                            hw_list = event.get('homework', [])
-                            if not isinstance(hw_list, list): hw_list = [hw_list] if hw_list else []
-                            
-                            for hw in hw_list:
-                                desc = (hw.get('description', '') or hw.get('text', '')).lower()
-                                link = None
-                                
-                                # Пытаемся найти ссылку в материалах
-                                materials = hw.get('materials', [])
-                                for m in materials:
-                                    for item in m.get('items', []):
-                                        curr_link = item.get('link')
-                                        if curr_link: link = curr_link; break
-                                    if link: break
-                                    
-                                # Если ссылки нет в материалах, ищем в тексте описания
-                                if not link:
-                                    urls = re.findall(r'https?://[^\s<>"]+', desc)
-                                    if urls: link = urls[0]
-                                    
-                                # Решаем: является ли это ЦДЗ
-                                is_cdz = False
-                                if link:
-                                    # Ссылка на знакомый ресурс - точно ЦДЗ
-                                    if any(x in link for x in ["mesh.mos.ru", "school.mos.ru", "videouroki.net", "uchi.ru"]):
-                                        is_cdz = True
-                                    # Или в описании есть метки, а ссылка любая другая
-                                    elif re.search(kw_pattern, desc):
-                                        is_cdz = True
-                                elif re.search(kw_pattern, desc):
-                                    # Даже если ссылки нет, но слова "тест" или "цдз" есть - возможно это ЦДЗ (хотя бот его не решит)
-                                    # Но мы пометим для счетчика
-                                    is_cdz = True
-                                    
-                                if is_cdz:
-                                    homeworks.append({
-                                        "subject": subject, 
-                                        "description": hw.get('description', ''), 
-                                        "date": event.get('start_at', date_str)[:10], 
-                                        "link": link
-                                    })
-                        return homeworks
-            except Exception as e:
-                logger.error(f"Homework error: {e}")
-        return []
+        return hw_results
 
-    async def _get_homework_fallback(self, access_token, student_id, date_str):
-        """Fallback: homeworks/short через authedu.mosreg.ru"""
-        end_date = (datetime.strptime(date_str, '%Y-%m-%d') + timedelta(days=1)).strftime('%Y-%m-%d')
-        url = (f"https://authedu.mosreg.ru/api/family/mobile/v1/homeworks/short"
-               f"?student_id={student_id}&from={date_str}&to={end_date}")
-        headers = self.base_headers.copy()
-        headers['Authorization'] = f'Bearer {access_token}'
-        headers['auth-token'] = access_token
-        
-        async with aiohttp.ClientSession() as session:
-            try:
-                async with session.get(url, headers=headers, timeout=15) as resp:
-                    logger.info(f"Homework fallback status={resp.status}")
-                    if resp.status == 200:
-                        data = await resp.json()
-                        logger.info(f"Homework fallback data: {json.dumps(data, ensure_ascii=False)[:300]}")
-                        homeworks = []
-                        payload = data.get('payload', data) if isinstance(data, dict) else data
-                        if isinstance(payload, list):
-                            for hw in payload:
-                                subject = hw.get('subject_name', 'Без предмета')
-                                desc = hw.get('description', '')
-                                for material in hw.get('materials', []):
-                                    for item in material.get('items', []):
-                                        link = item.get('link')
-                                        if link:
-                                            homeworks.append({
-                                                "subject": subject, "description": desc,
-                                                "date": hw.get('date', date_str), "link": link
-                                            })
-                                if not any(m.get('items') for m in hw.get('materials', [])):
-                                    homeworks.append({
-                                        "subject": subject, "description": desc,
-                                        "date": hw.get('date', date_str), "link": None
-                                    })
-                        return homeworks
-            except Exception as e:
-                logger.error(f"Homework fallback error: {e}")
-        return []
 
     async def fetch_mesh_profile(self, token):
         url = "https://school.mos.ru/api/family/v1/profile"
