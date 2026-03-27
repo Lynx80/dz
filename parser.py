@@ -258,12 +258,15 @@ class ParserService:
 
         headers = self.base_headers.copy()
         headers['Authorization'] = f'Bearer {access_token}'
+        headers['auth-token'] = access_token
+        headers['Access-Token'] = access_token
         headers['Referer'] = 'https://myschool.mosreg.ru/'
         
         session = await self._get_session()
         
         # Список эндпоинтов (url, subsystem, id_param, apikey_needed, use_guid)
         endpoints = [
+            ("https://api.myschool.mosreg.ru/family/mobile/v1/profile/current/schedule", "familymp", "date", False, False),
             ("https://authedu.mosreg.ru/api/eventcalendar/v1/api/events", "familyweb", "personId", False, False),
             ("https://api.myschool.mosreg.ru/family/mobile/v1/schedule/short", "familymp", "student_id", False, False),
             ("https://api.myschool.mosreg.ru/family/v2/diary", "familymp", "student_id", False, False),
@@ -274,7 +277,7 @@ class ParserService:
         all_items = []
         for i, (base_url, sub, id_param, needs_apikey, use_guid) in enumerate(endpoints):
             cur_id = mesh_id if use_guid and mesh_id else student_id
-            if not cur_id: continue
+            if not cur_id and id_param != "date": continue
 
             try:
                 # Формируем URL
@@ -284,6 +287,8 @@ class ParserService:
                     begin_label = "begin_date" if id_param == "person_ids" else "beginDate"
                     end_label = "end_date" if id_param == "person_ids" else "endDate"
                     url = f"{base_url}?{id_param}={cur_id}&{begin_label}={date_str}&{end_label}={date_str}&expand=homework,marks,absence_reason_id"
+                elif id_param == "date" and "profile/current" in base_url:
+                    url = f"{base_url}?date={date_str}"
                 else:
                     url = f"{base_url}?{id_param}={cur_id}&date={date_str}"
                 
@@ -297,57 +302,57 @@ class ParserService:
                 async with session.get(url, headers=h, timeout=12) as resp:
                     logger.info(f"Schedule fetch [{sub}] {url}: {resp.status}")
                     if resp.status == 200:
-                        data = await resp.json()
-                        events = data.get('response') or data.get('data') or data.get('payload') or []
-                        if not events and isinstance(data, list): events = data
-                        
-                        if events:
-                            for ev in events:
-                                subject = ev.get('subject_name') or ev.get('title') or ev.get('subject', {}).get('name', 'Урок')
-                                start = ev.get('start_at') or ev.get('begin_time') or ev.get('start_time') or ev.get('start', '')
-                                end = ev.get('finish_at') or ev.get('end_time') or ev.get('end', '')
-                                
-                                hw_data = ev.get('homework') or []
-                                hw_text = ""
-                                if isinstance(hw_data, list):
-                                    hw_text = "; ".join([h.get('description', '') for h in hw_data if h.get('description')])
-                                elif isinstance(hw_data, dict):
-                                    hw_text = hw_data.get('description', '')
-                                if not hw_text: hw_text = ev.get('homework_text') or ""
-                                
-                                room = ev.get('room_number') or ev.get('room_name') or '?'
-                                
-                                def format_time(t):
-                                    if not t: return ""
-                                    t = str(t)
-                                    if 'T' in t: return t.split('T')[1][:5]
-                                    if ' ' in t: # "2026-03-26 09:00:00"
-                                        try: return t.split(' ')[1][:5]
-                                        except: pass
-                                    if ':' in t:
-                                        parts = t.split(':')
-                                        if len(parts) >= 2:
-                                            hrs = parts[0][-2:].strip().zfill(2)
-                                            mns = parts[1][:2].strip().zfill(2)
-                                            return f"{hrs}:{mns}"
-                                    return t
-
-                                time_str = f"{format_time(start)}-{format_time(end)}"
-                                lesson_obj = {
-                                    'name': subject,
-                                    'subject': subject,
-                                    'time': time_str,
-                                    'hw': hw_text,
-                                    'room': room,
-                                    'id': ev.get('id') or ev.get('lesson_id')
-                                }
-                                
-                                if not any(x['name'] == subject and x['time'] == time_str for x in all_items):
-                                    all_items.append(lesson_obj)
+                        if "application/json" in resp.headers.get("Content-Type", "").lower():
+                            data = await resp.json()
+                            events = []
+                            if isinstance(data, dict):
+                                events = data.get('response') or data.get('data') or data.get('payload') or []
+                                if not events and isinstance(data.get('data'), list): events = data['data']
+                            elif isinstance(data, list):
+                                events = data
                             
-                            if all_items:
-                                logger.info(f"Schedule found {len(all_items)} items from {sub}")
-                                break # Нашли уроки, выходим из цикла эндпоинтов
+                            if events:
+                                for ev in events:
+                                    subject = ev.get('subject_name') or ev.get('title') or ev.get('subject', {}).get('name', 'Урок')
+                                    start = ev.get('start_at') or ev.get('begin_time') or ev.get('start_time') or ev.get('start', '')
+                                    end = ev.get('finish_at') or ev.get('end_time') or ev.get('end', '')
+                                    
+                                    hw_data = ev.get('homework') or []
+                                    hw_text = ""
+                                    if isinstance(hw_data, list):
+                                        hw_text = "; ".join([h.get('description', '') for h in hw_data if h.get('description')])
+                                    elif isinstance(hw_data, dict):
+                                        hw_text = hw_data.get('description', '')
+                                    if not hw_text: hw_text = ev.get('homework_text') or ""
+                                    
+                                    room = ev.get('room_number') or ev.get('room_name') or '?'
+                                    
+                                    def format_time(t):
+                                        if not t: return ""
+                                        t = str(t)
+                                        if 'T' in t: return t.split('T')[1][:5]
+                                        if ' ' in t: # "2026-03-26 09:00:00"
+                                            try: return t.split(' ')[1][:5]
+                                            except: pass
+                                        if ':' in t:
+                                            parts = t.split(':')
+                                            if len(parts) >= 2:
+                                                hrs = parts[0][-2:].strip().zfill(2)
+                                                mns = parts[1][:2].strip().zfill(2)
+                                                return f"{hrs}:{mns}"
+                                        return t
+
+                                    time_str = f"{format_time(start)}-{format_time(end)}"
+                                    lesson_obj = {
+                                        'name': subject, 'subject': subject, 'time': time_str,
+                                        'hw': hw_text, 'room': room, 'id': ev.get('id') or ev.get('lesson_id')
+                                    }
+                                    if not any(x['name'] == subject and x['time'] == time_str for x in all_items):
+                                        all_items.append(lesson_obj)
+                                
+                                if all_items:
+                                    logger.info(f"Schedule found {len(all_items)} items from {sub}")
+                                    break # Нашли уроки, выходим из цикла эндпоинтов
                     elif resp.status == 401 and i == len(endpoints) - 1:
                         raise MosregAuthError("Токен истек")
             except MosregAuthError:
@@ -375,6 +380,7 @@ class ParserService:
         headers = self.base_headers.copy()
         headers['Authorization'] = f'Bearer {access_token}'
         headers['auth-token'] = access_token
+        headers['Access-Token'] = access_token # New for some subsystems
         
         session = await self._get_session()
         subsystems = ['family', 'familymp', 'educational']
@@ -683,90 +689,85 @@ class ParserService:
         return -1
 
     async def get_mosreg_schedule_playwright(self, access_token, date_str):
-        """Метод получения расписания через браузер (Playwright). Самый надежный, но медленный."""
+        """Метод получения расписания через браузер с использованием /login/token."""
         from playwright.async_api import async_playwright
         import json
         
-        logger.info(f"Starting Playwright schedule fetch for {date_str}")
+        logger.info(f"Starting Auto-Login Playwright fetch for {date_str}")
         async with async_playwright() as p:
-            # Запускаем браузер с подменой User-Agent
             browser = await p.chromium.launch(headless=True)
             context = await browser.new_context(
-                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                viewport={'width': 1280, 'height': 800}
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
             )
             page = await context.new_page()
+            intercepted_data = []
+
+            async def handle_response(response):
+                if any(x in response.url for x in ["schedule", "diary", "events"]) and response.status == 200:
+                    try:
+                        text = await response.text()
+                        data = json.loads(text)
+                        payload = data.get('response') or data.get('data') or data.get('payload') or []
+                        if not payload and isinstance(data, list): payload = data
+                        if payload: intercepted_data.append(payload)
+                    except: pass
+
+            page.on("response", handle_response)
             
             try:
-                # 1. Авторизация через токен в localStorage
-                await page.goto("https://myschool.mosreg.ru/login") # Сначала на логин чтобы домен закрепился
-                await asyncio.sleep(1)
+                # Пытаемся зайти через специальный URL авто-логина по токену
+                login_url = f"https://myschool.mosreg.ru/login/token?token={access_token}"
+                logger.info(f"Navigating to auto-login URL...")
+                await page.goto(login_url, wait_until="networkidle", timeout=40000)
+                
+                # Принудительно ставим identity если редирект на главную случился, но токен не подхватился
                 await page.evaluate(f'window.localStorage.setItem("identity", "{access_token}")')
                 
-                # 2. Переход на расписание
+                # Переходим на расписание
                 schedule_url = f"https://myschool.mosreg.ru/schedule?date={date_str}"
-                logger.debug(f"Navigating to {schedule_url}")
+                await page.goto(schedule_url, wait_until="networkidle", timeout=40000)
                 
-                # Ждем загрузки данных (networkidle + селекторы)
-                await page.goto(schedule_url, wait_until="domcontentloaded", timeout=30000)
-                
-                # Ждем либо появления уроков, либо сообщения "Уроков нет"
-                try:
-                    await page.wait_for_selector(".schedule-item, .empty-state, .no-lessons", timeout=15000)
-                except:
-                    logger.warning("Timeout waiting for schedule selectors")
+                await asyncio.sleep(5) # Ждем прогрузки всех API ответов
 
-                await asyncio.sleep(2) # Даем время на рендер JS
-                
-                items = []
-                # Пробуем скрапить по селекторам (адаптировано под текущий дизайн)
-                lessons = await page.query_selector_all(".schedule-item, [class*='LessonCard'], [class*='ScheduleItem']")
-                
-                if not lessons:
-                    # Если селекторы не сработали, пробуем найти по тексту времени
-                    lessons = await page.query_selector_all("//div[contains(text(), ':')] /ancestor::div[string-length(text()) < 500][position()=1]")
+                if intercepted_data:
+                    all_items = []
+                    events = intercepted_data[0]
+                    for ev in events:
+                        subject = ev.get('subject_name') or ev.get('title') or ev.get('subject', {}).get('name', 'Урок')
+                        start = str(ev.get('start_at') or ev.get('begin_time') or ev.get('start_time') or '')
+                        end = str(ev.get('finish_at') or ev.get('end_time') or ev.get('end', '') or '')
+                        
+                        def parse_t(t):
+                            if 'T' in t: return t.split('T')[1][:5]
+                            if ' ' in t: return t.split(' ')[1][:5]
+                            return t[:5]
 
-                for lesson in lessons:
-                    try:
-                        text = await lesson.inner_text()
-                        lines = [line.strip() for line in text.split('\n') if line.strip()]
-                        if not lines: continue
+                        time_str = f"{parse_t(start)}-{parse_t(end)}"
+                        hw = ev.get('homework_text') or ""
                         
-                        # Базовая эвристика парсинга карточки:
-                        # Обычно: Время, Название, ДЗ
-                        time_match = re.search(r'(\d{1,2}:\d{2})\s*-\s*(\d{1,2}:\d{2})', text)
-                        time_str = time_match.group(0) if time_match else "??:??-??:??"
-                        
-                        # Предмет обычно первая или вторая строка
-                        subj = lines[0] if ":" not in lines[0] else lines[1]
-                        
-                        # ДЗ обычно содержит слово "Задание" или идет в конце
-                        hw = ""
-                        for line in lines:
-                            if "задание" in line.lower() or "дз" in line.lower():
-                                hw = line
-                                break
-                        if not hw and len(lines) > 2: hw = lines[-1]
-
-                        items.append({
-                            "name": subj[:50].strip(),
-                            "subject": subj[:50].strip(),
-                            "time": time_str,
-                            "hw": hw[:200].strip(),
-                            "room": ""
+                        all_items.append({
+                            'name': subject, 'subject': subject,
+                            'time': time_str,
+                            'hw': hw, 'room': ev.get('room_number', '?')
                         })
-                    except: continue
+                    if all_items: return all_items
 
-                if items:
-                    logger.info(f"Playwright successfully scraped {len(items)} lessons.")
-                    # Кэшируем результат
-                    cache_key = f"schedule_pw_{access_token[:20]}_{date_str}"
-                    self._set_to_cache(cache_key, items)
-                    return items
-                    
-                logger.warning("Playwright finished but found no lessons.")
+                # Если перехват не сработал - пробуем скрапить DOM
+                lesson_blocks = await page.query_selector_all("//div[contains(., ':') and string-length(text()) < 10]/ancestor::div[string-length(.) < 1000 and string-length(.) > 50][position()=1]")
+                items = []
+                for block in lesson_blocks:
+                    text = await block.inner_text()
+                    lines = [l.strip() for l in text.split('\n') if l.strip()]
+                    if len(lines) >= 2:
+                        items.append({'name': lines[0], 'subject': lines[0], 'time': lines[1], 'hw': lines[2] if len(lines) > 2 else "", 'room': ""})
+                
+                if items: return items
+                
+                logger.warning(f"Final Playwright attempt failed. Title: {await page.title()}")
+                await page.screenshot(path=f"tmp/last_fail_{date_str}.png")
+
             except Exception as e:
-                logger.error(f"Playwright schedule error: {e}")
+                logger.error(f"Playwright fatal error: {e}")
             finally:
                 await browser.close()
         return []
