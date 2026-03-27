@@ -362,7 +362,12 @@ class ParserService:
         
         # Last resort: try V3 API
         logger.info(f"All standard fallbacks failed for user {student_id}. Trying V3 API.")
-        return await self.get_mosreg_schedule_v3(access_token, student_id, date_str)
+        items = await self.get_mosreg_schedule_v3(access_token, student_id, date_str)
+        if items: return items
+
+        # ULTIMATE resort: Playwright scraping
+        logger.info(f"API methods failed for user {student_id}. Launching Playwright fallback.")
+        return await self.get_mosreg_schedule_playwright(access_token, date_str)
 
     async def get_mosreg_schedule_v3(self, access_token, student_id, date_str, retry_auth=True):
         """Резервный метод получения расписания через v3 API"""
@@ -676,3 +681,92 @@ class ParserService:
         for i, opt in enumerate(options):
             if val_str in opt.lower(): return i
         return -1
+
+    async def get_mosreg_schedule_playwright(self, access_token, date_str):
+        """Метод получения расписания через браузер (Playwright). Самый надежный, но медленный."""
+        from playwright.async_api import async_playwright
+        import json
+        
+        logger.info(f"Starting Playwright schedule fetch for {date_str}")
+        async with async_playwright() as p:
+            # Запускаем браузер с подменой User-Agent
+            browser = await p.chromium.launch(headless=True)
+            context = await browser.new_context(
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                viewport={'width': 1280, 'height': 800}
+            )
+            page = await context.new_page()
+            
+            try:
+                # 1. Авторизация через токен в localStorage
+                await page.goto("https://myschool.mosreg.ru/login") # Сначала на логин чтобы домен закрепился
+                await asyncio.sleep(1)
+                await page.evaluate(f'window.localStorage.setItem("identity", "{access_token}")')
+                
+                # 2. Переход на расписание
+                schedule_url = f"https://myschool.mosreg.ru/schedule?date={date_str}"
+                logger.debug(f"Navigating to {schedule_url}")
+                
+                # Ждем загрузки данных (networkidle + селекторы)
+                await page.goto(schedule_url, wait_until="domcontentloaded", timeout=30000)
+                
+                # Ждем либо появления уроков, либо сообщения "Уроков нет"
+                try:
+                    await page.wait_for_selector(".schedule-item, .empty-state, .no-lessons", timeout=15000)
+                except:
+                    logger.warning("Timeout waiting for schedule selectors")
+
+                await asyncio.sleep(2) # Даем время на рендер JS
+                
+                items = []
+                # Пробуем скрапить по селекторам (адаптировано под текущий дизайн)
+                lessons = await page.query_selector_all(".schedule-item, [class*='LessonCard'], [class*='ScheduleItem']")
+                
+                if not lessons:
+                    # Если селекторы не сработали, пробуем найти по тексту времени
+                    lessons = await page.query_selector_all("//div[contains(text(), ':')] /ancestor::div[string-length(text()) < 500][position()=1]")
+
+                for lesson in lessons:
+                    try:
+                        text = await lesson.inner_text()
+                        lines = [line.strip() for line in text.split('\n') if line.strip()]
+                        if not lines: continue
+                        
+                        # Базовая эвристика парсинга карточки:
+                        # Обычно: Время, Название, ДЗ
+                        time_match = re.search(r'(\d{1,2}:\d{2})\s*-\s*(\d{1,2}:\d{2})', text)
+                        time_str = time_match.group(0) if time_match else "??:??-??:??"
+                        
+                        # Предмет обычно первая или вторая строка
+                        subj = lines[0] if ":" not in lines[0] else lines[1]
+                        
+                        # ДЗ обычно содержит слово "Задание" или идет в конце
+                        hw = ""
+                        for line in lines:
+                            if "задание" in line.lower() or "дз" in line.lower():
+                                hw = line
+                                break
+                        if not hw and len(lines) > 2: hw = lines[-1]
+
+                        items.append({
+                            "name": subj[:50].strip(),
+                            "subject": subj[:50].strip(),
+                            "time": time_str,
+                            "hw": hw[:200].strip(),
+                            "room": ""
+                        })
+                    except: continue
+
+                if items:
+                    logger.info(f"Playwright successfully scraped {len(items)} lessons.")
+                    # Кэшируем результат
+                    cache_key = f"schedule_pw_{access_token[:20]}_{date_str}"
+                    self._set_to_cache(cache_key, items)
+                    return items
+                    
+                logger.warning("Playwright finished but found no lessons.")
+            except Exception as e:
+                logger.error(f"Playwright schedule error: {e}")
+            finally:
+                await browser.close()
+        return []
