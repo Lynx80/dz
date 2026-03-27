@@ -29,6 +29,7 @@ class ParserService:
             'Client-Type': 'diary-mobile',
             'X-Mes-Subsystem': 'family'
         }
+        self.last_profile_id = None
 
     def _get_from_cache(self, key):
         if key in self._cache:
@@ -150,6 +151,8 @@ class ParserService:
                 
                 # sub обычно содержит ID пользователя
                 user_info["student_id"] = str(decoded.get('sub', '') or decoded.get('person_id', ''))
+                # Сохраняем profile-id если он есть в токене (иногда бывает)
+                user_info["profile_id"] = str(decoded.get('profile_id') or decoded.get('profileId') or '')
         except Exception as e:
             logger.warning(f"JWT decode error: {e}")
 
@@ -220,6 +223,10 @@ class ParserService:
         if not user_info.get("first_name"):
             user_info["first_name"] = "Пользователь"
             
+        # Если даже ID не нашли, это ошибка
+        if user_info.get("profile_id"):
+            self.last_profile_id = user_info["profile_id"]
+        
         if user_info.get("student_id"):
             return user_info
         
@@ -247,6 +254,7 @@ class ParserService:
             "last_name": child_data.get('last_name') or child_data.get('lastname') or '',
             "grade": grade,
             "student_id": str(sid),
+            "profile_id": str(sid), # Обычно profile_id это и есть id из children
             "mesh_id": str(mesh_id)
         }
 
@@ -267,7 +275,7 @@ class ParserService:
         # Список эндпоинтов (url, subsystem, id_param, apikey_needed, use_guid)
         endpoints = [
             ("https://api.myschool.mosreg.ru/family/mobile/v1/profile/current/schedule", "familymp", "date", False, False),
-            ("https://authedu.mosreg.ru/api/eventcalendar/v1/api/events", "familyweb", "personId", False, False),
+            ("https://authedu.mosreg.ru/api/eventcalendar/v1/api/events", "familyweb", "person_ids", False, True),
             ("https://api.myschool.mosreg.ru/family/mobile/v1/schedule/short", "familymp", "student_id", False, False),
             ("https://api.myschool.mosreg.ru/family/v2/diary", "familymp", "student_id", False, False),
             ("https://authedu.mosreg.ru/api/eventcalendar/v1/api/events", "family", "person_ids", True, True),
@@ -284,9 +292,14 @@ class ParserService:
                 if "schedule/short" in base_url:
                     url = f"{base_url}?{id_param}={cur_id}&from={date_str}&to={date_str}"
                 elif "eventcalendar" in base_url:
-                    begin_label = "begin_date" if id_param == "person_ids" else "beginDate"
-                    end_label = "end_date" if id_param == "person_ids" else "endDate"
-                    url = f"{base_url}?{id_param}={cur_id}&{begin_label}={date_str}&{end_label}={date_str}&expand=homework,marks,absence_reason_id"
+                    begin_label = "begin_date" if id_param in ["person_ids", "personId"] else "beginDate"
+                    end_label = "end_date" if id_param in ["person_ids", "personId"] else "endDate"
+                    
+                    # Полный список параметров "как в браузере"
+                    expand = "homework,marks,absence_reason_id,health_status,nonattendance_reason_id"
+                    source_types = "PLAN,AE,EC,EVENTS,AFISHA,ORGANIZER,OLYMPIAD,PROF"
+                    
+                    url = f"{base_url}?{id_param}={cur_id}&{begin_label}={date_str}&{end_label}={date_str}&expand={expand}&source_types={source_types}"
                 elif id_param == "date" and "profile/current" in base_url:
                     url = f"{base_url}?date={date_str}"
                 else:
@@ -294,6 +307,19 @@ class ParserService:
                 
                 h = headers.copy()
                 h['X-Mes-Subsystem'] = sub
+                h['X-Mes-Role'] = 'student'
+                h['profile-type'] = 'student'
+                
+                # Добавляем profile-id если он есть
+                # (Для Mosreg familyweb/familymp это критически важно)
+                if hasattr(self, 'last_profile_id') and self.last_profile_id:
+                    h['profile-id'] = str(self.last_profile_id)
+                elif mesh_id and mesh_id.isdigit():
+                    h['profile-id'] = mesh_id
+
+                if sub == 'familyweb':
+                    h['Referer'] = 'https://authedu.mosreg.ru/diary/schedules/day/'
+
                 if needs_apikey:
                     h['apikey'] = '7ef6c62c-7b00-4796-96c6-2c7b00279619'
                 
@@ -317,13 +343,16 @@ class ParserService:
                                     start = ev.get('start_at') or ev.get('begin_time') or ev.get('start_time') or ev.get('start', '')
                                     end = ev.get('finish_at') or ev.get('end_time') or ev.get('end', '')
                                     
-                                    hw_data = ev.get('homework') or []
+                                    hw_data = ev.get('homework') or {}
                                     hw_text = ""
-                                    if isinstance(hw_data, list):
-                                        hw_text = "; ".join([h.get('description', '') for h in hw_data if h.get('description')])
-                                    elif isinstance(hw_data, dict):
-                                        hw_text = hw_data.get('description', '')
-                                    if not hw_text: hw_text = ev.get('homework_text') or ""
+                                    if isinstance(hw_data, dict):
+                                        descs = hw_data.get('descriptions') or hw_data.get('description') or []
+                                        if isinstance(descs, list):
+                                            hw_text = "; ".join([str(d) for d in descs if d])
+                                        else:
+                                            hw_text = str(descs)
+                                    if not hw_text: 
+                                        hw_text = ev.get('homework_text') or ""
                                     
                                     room = ev.get('room_number') or ev.get('room_name') or '?'
                                     
@@ -744,6 +773,14 @@ class ParserService:
 
                         time_str = f"{parse_t(start)}-{parse_t(end)}"
                         hw = ev.get('homework_text') or ""
+                        if not hw and isinstance(ev.get('homework'), dict):
+                            hw_data = ev['homework']
+                            # В новом API authedu текст лежит в descriptions (список)
+                            descs = hw_data.get('descriptions') or hw_data.get('description') or []
+                            if isinstance(descs, list):
+                                hw = "; ".join([str(d) for d in descs if d])
+                            elif isinstance(descs, str):
+                                hw = descs
                         
                         all_items.append({
                             'name': subject, 'subject': subject,
