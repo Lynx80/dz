@@ -100,7 +100,9 @@ class ParserService:
             'https://myschool.mosreg.ru/acl/api/users/profile_info',
             'https://myschool.mosreg.ru/acl/api/v1/auth/activate',
             'https://api.myschool.mosreg.ru/educational/v1/profile',
-            'https://authedu.mosreg.ru/api/family/web/v1/profile' # Из oms/lib
+            'https://authedu.mosreg.ru/api/family/web/v1/profile',
+            'https://authedu.mosreg.ru/api/profile/v2/handshake',
+            'https://authedu.mosreg.ru/api/family/mobile/v1/profile'
         ]
         
         headers['Authorization'] = f'Bearer {access_token}'
@@ -264,6 +266,7 @@ class ParserService:
         endpoints = [
             ("https://authedu.mosreg.ru/api/eventcalendar/v1/api/events", "familyweb", "personId", False, False),
             ("https://api.myschool.mosreg.ru/family/mobile/v1/schedule/short", "familymp", "student_id", False, False),
+            ("https://api.myschool.mosreg.ru/family/v2/diary", "familymp", "student_id", False, False),
             ("https://authedu.mosreg.ru/api/eventcalendar/v1/api/events", "family", "person_ids", True, True),
             ("https://api.myschool.mosreg.ru/family/mobile/v1/schedule", "familymp", "student_id", False, False)
         ]
