@@ -478,8 +478,17 @@ async def show_day_homework(message: types.Message, user: dict, date_str: str, s
                     m_link = m.get('link', '')
                     if m_link:
                         safe_link = html.escape(m_link)
-                        m_icon = "⚡️" if any(x in m_link.lower() for x in ['edu-content', 'uchebnik', 'test', 'videouroki']) else "🔗"
-                        link_label = "ПЕРЕЙТИ К ТЕСТУ" if m_icon == "⚡️" else m_title
+                        
+                        # Определяем иконку: Файл или Ссылка
+                        is_file = m.get('type') == 'file' or any(m_link.lower().endswith(ext) for ext in ['.pdf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx', '.jpg', '.png', '.zip'])
+                        
+                        if is_file:
+                            m_icon = "📎"
+                            link_label = m_title
+                        else:
+                            m_icon = "⚡️" if any(x in m_link.lower() for x in ['edu-content', 'uchebnik', 'test', 'videouroki']) else "🔗"
+                            link_label = "ПЕРЕЙТИ К ТЕСТУ" if m_icon == "⚡️" else m_title
+                        
                         text_parts.append(f"     {m_icon} <a href='{safe_link}'><b>{link_label}</b></a>")
             text_parts.append("") 
         
