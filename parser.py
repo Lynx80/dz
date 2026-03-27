@@ -176,11 +176,10 @@ class ParserService:
     def _find_attachments_recursively(self, obj, seen_links, results):
         """
         Рекурсивно ищет вложения и ссылки. 
-        Включает фильтрацию 'мусорных' ссылок (телеметрия, внутренние ID).
+        Теперь лучше извлекает оригинальные названия файлов учителей.
         """
         if not obj: return
         
-        # Список доменов-исключений (телеметрия, аналитика, внутренние сервисы)
         BLOCKLIST = [
             'telemetry.mos.ru', 'google-analytics.com', 'mc.yandex.ru', 
             'stat.mos.ru', 'monitoring.mos.ru', 'ads.yandex.ru'
@@ -189,58 +188,57 @@ class ParserService:
         if isinstance(obj, list):
             for item in obj: self._find_attachments_recursively(item, seen_links, results)
         elif isinstance(obj, dict):
-            # 1. Проверка явных полей ссылок
-            is_digital = obj.get('is_digital') or obj.get('is_digital_homework') or (obj.get('item_type') == 'digital_task')
-            name = obj.get('file_name') or obj.get('name') or obj.get('title') or obj.get('filename') or obj.get('text') or 'Материал'
+            # 1. Извлечение названия
+            # Учителя часто кладут название в file_name или оригинальный name
+            name = obj.get('file_name') or obj.get('name') or obj.get('title') or \
+                   obj.get('filename') or obj.get('text') or obj.get('original_name') or 'Материал'
             
-            # Собираем все возможные ключи ссылок
+            # 2. Извлечение ссылки
             link = obj.get('link') or obj.get('url') or obj.get('download_url') or obj.get('downloadUrl') or \
                    obj.get('download_link') or obj.get('path') or obj.get('web_link')
             
-            # Учебный материал МЭШ (uchebnik.mos.ru)
+            # Учебный материал МЭШ
             if not link and obj.get('material_id'):
                 link = f"https://uchebnik.mos.ru/material/view/{obj['material_id']}"
             
-            if link and isinstance(link, str) and link.startswith('http'):
-                # Нормализация и фильтрация
+            if link and isinstance(link, str) and (link.startswith('http') or link.startswith('/')):
                 if link.startswith('/'): link = f"https://myschool.mosreg.ru{link}"
                 
-                # Фильтр: Блоклист доменов
-                if any(domain in link.lower() for domain in BLOCKLIST): link = None
-                
-                # Фильтр: Чисто числовые ссылки (часто внутренние ID)
-                if link and re.search(r'/\d{7,}/?$', link): link = None
+                if not any(domain in link.lower() for domain in BLOCKLIST):
+                    if link not in seen_links:
+                        # Фильтр на мусорные ID-ссылки (если это не файл)
+                        is_file = any(link.lower().endswith(ext) for ext in ['.pdf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx', '.jpg', '.png', '.zip'])
+                        if not is_file and re.search(r'/\d{7,}/?$', link): link = None
 
-                if link and link not in seen_links:
-                    seen_links.add(link)
-                    display_name = str(name)
-                    if is_digital and 'ЦДЗ' not in display_name.upper():
-                        display_name = f"🔥 ЦДЗ: {display_name}"
-                    
-                    results.append({
-                        'title': display_name, 
-                        'link': link, 
-                        'type': 'digital' if is_digital else 'link',
-                        'is_digital': bool(is_digital)
-                    })
+                        if link:
+                            seen_links.add(link)
+                            is_digital = obj.get('is_digital') or obj.get('is_digital_homework') or (obj.get('item_type') == 'digital_task')
+                            
+                            display_name = str(name)
+                            # Если это ЦДЗ, но нет метки - добавляем огонек
+                            if is_digital and 'ЦДЗ' not in display_name.upper():
+                                display_name = f"🔥 ЦДЗ: {display_name}"
+                            
+                            results.append({
+                                'title': display_name, 
+                                'link': link, 
+                                'type': 'file' if is_file else ('digital' if is_digital else 'link'),
+                                'is_digital': bool(is_digital or is_file)
+                            })
             
-            # 2. Рекурсия по всем полям (поиск вложенных материалов)
+            # 3. Рекурсия по системным полям
             for k, v in obj.items():
-                if k in ['materials', 'attachments', 'entries', 'content', 'items']:
+                if k in ['materials', 'attachments', 'entries', 'content', 'items', 'files']:
                     if isinstance(v, (dict, list)):
                         self._find_attachments_recursively(v, seen_links, results)
                 elif isinstance(v, str) and k in ['description', 'text', 'comment', 'value']:
-                    # 3. Поиск ссылок в тексте (то, что пишут учителя)
+                    # Поиск ссылок в тексте
                     found_urls = re.findall(r'https?://[^\s<>"]+', v)
                     for url in found_urls:
                         url = url.rstrip('.,;:')
-                        # Фильтрация мусора в тексте
                         if any(domain in url.lower() for domain in BLOCKLIST): continue
-                        if re.search(r'/\d{8,}/?$', url): continue
-                        
                         if url not in seen_links:
                             seen_links.add(url)
-                            # Определяем образовательный домен
                             is_cdz = any(d in url for d in ['resh.edu.ru', 'znaika.space', 'skysmart.ru', 'uchebnik.mos.ru', 'yaklass.ru', 'videouroki.net'])
                             results.append({
                                 'title': '🔥 ЦДЗ (из описания)' if is_cdz else 'Ссылка из задания', 
@@ -248,7 +246,7 @@ class ParserService:
                                 'type': 'link',
                                 'is_digital': is_cdz
                             })
-                elif isinstance(v, (dict, list)) and k not in ['homework', 'homeworks']: # избегаем бесконечной рекурсии если homework ссылается сам на себя
+                elif isinstance(v, (dict, list)) and k not in ['homework', 'homeworks']:
                      self._find_attachments_recursively(v, seen_links, results)
 
     async def fetch_mosreg_profile(self, access_token):
