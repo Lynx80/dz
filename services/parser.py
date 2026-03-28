@@ -187,6 +187,14 @@ class ParserService:
             'stat.mos.ru', 'monitoring.mos.ru', 'ads.yandex.ru'
         ]
 
+        # Домены, которые ТОЧНО являются ЦДЗ (тестами)
+        CDZ_DOMAINS = [
+            'resh.edu.ru', 'znaika.space', 'skysmart.ru', 
+            'uchebnik.mos.ru', 'yaklass.ru', 'videouroki.net',
+            'edu-content.mos.ru', 'school.mos.ru', 'mesh.mos.ru',
+            'skyeng.ru', 'foxford.ru', 'uchi.ru', 'onlinetestpad.com'
+        ]
+
         if isinstance(obj, list):
             for item in obj: self._find_attachments_recursively(item, seen_links, results)
         elif isinstance(obj, dict):
@@ -219,16 +227,15 @@ class ParserService:
 
                         if link:
                             seen_links.add(link)
-                            is_digital = obj.get('is_digital') or obj.get('is_digital_homework') or (obj.get('item_type') == 'digital_task')
+                            is_test = any(d in link.lower() for d in CDZ_DOMAINS)
+                            is_digital = obj.get('is_digital') or obj.get('is_digital_homework') or (obj.get('item_type') == 'digital_task') or is_test
                             
                             display_name = str(name)
                             # Очистка названия от расширения если оно дублирует
                             if "." in display_name and is_file:
                                 display_name = display_name[:display_name.rfind('.')]
                             
-                            is_test = any(x in link.lower() for x in ["test", "exam", "edu-content", "resh.edu"])
-                            
-                            if is_test or is_digital:
+                            if is_digital:
                                 icon = "🧠"
                                 m_type = "digital"
                             elif is_file or "mosreg.ru" in link.lower():
@@ -243,7 +250,7 @@ class ParserService:
                             results.append({
                                 'title': display_name, 
                                 'link': link, 
-                                'is_digital': bool(is_digital or is_test),
+                                'is_digital': bool(is_digital),
                                 'type': m_type
                             })
             
@@ -252,7 +259,7 @@ class ParserService:
                 if k in ['materials', 'attachments', 'entries', 'content', 'items', 'files', 'original_files']:
                     if isinstance(v, (dict, list)):
                         self._find_attachments_recursively(v, seen_links, results)
-                elif isinstance(v, str) and k in ['description', 'text', 'comment', 'value']:
+                elif isinstance(v, str) and k in ['description', 'text', 'comment', 'value', 'note']:
                     # Поиск ссылок в тексте
                     found_urls = re.findall(r'https?://[^\s<>"]+', v)
                     for url in found_urls:
@@ -260,11 +267,12 @@ class ParserService:
                         if any(domain in url.lower() for domain in BLOCKLIST): continue
                         if url not in seen_links:
                             seen_links.add(url)
-                            is_cdz = any(d in url for d in ['resh.edu.ru', 'znaika.space', 'skysmart.ru', 'uchebnik.mos.ru', 'yaklass.ru', 'videouroki.net'])
+                            is_cdz = any(d in url for d in CDZ_DOMAINS)
                             results.append({
                                 'title': '🧠 ЦДЗ (текст)' if is_cdz else '🔗 Ссылка', 
                                 'link': url, 
-                                'is_digital': is_cdz
+                                'is_digital': is_cdz,
+                                'type': 'digital' if is_cdz else 'link'
                             })
                 elif isinstance(v, (dict, list)) and k not in ['homework', 'homeworks']:
                      self._find_attachments_recursively(v, seen_links, results)
@@ -567,6 +575,14 @@ class ParserService:
 
             hw_final = "; ".join(hw_text_list).strip()
             
+            # ДОПОЛНИТЕЛЬНО: Сканируем сам урок ТОЛЬКО на предмет ЦДЗ (тестов), 
+            # чтобы найти их, даже если они прикреплены не к объекту ДЗ.
+            lesson_level_mats = []
+            self._find_attachments_recursively(ev, seen_links, lesson_level_mats)
+            for m in lesson_level_mats:
+                if m.get('is_digital'):
+                    attachments.append(m)
+
             # Генерация хеша для синхронизации статуса дублей
             # Используем очищенный текст и предмет
             hw_raw_data = f"{subject.lower().strip()}:{hw_final.lower().strip()}"
@@ -794,21 +810,35 @@ class ParserService:
                     idx = self._match_index(ans_val, options_texts)
                     
                     # Применяем точность решения
-                    acc_mode = user.get('accuracy_mode', 'perfect')
+                    acc_mode = user.get('accuracy_mode', 'advanced')
                     chance = random.random()
+                    
+                    # Маппинг для обратной совместимости
+                    if acc_mode == 'modest': acc_mode = 'basic'
+                    if acc_mode == 'excellent': acc_mode = 'perfect'
+                    
                     if acc_mode == 'basic' and chance > 0.7:
                         wrong_indices = [i for i in range(len(options_elements)) if i != idx]
                         if wrong_indices: idx = random.choice(wrong_indices)
                     elif acc_mode == 'advanced' and chance > 0.85:
                         wrong_indices = [i for i in range(len(options_elements)) if i != idx]
                         if wrong_indices: idx = random.choice(wrong_indices)
-                    elif acc_mode == 'perfect' and chance > 0.95:
+                    elif acc_mode == 'perfect' and chance > 0.98: # Почти идеально
                         wrong_indices = [i for i in range(len(options_elements)) if i != idx]
                         if wrong_indices: idx = random.choice(wrong_indices)
 
                     if idx != -1:
+                        # Динамическая задержка на основе solve_delay (имитация раздумий)
+                        # Распределяем solve_delay на ~15-20 вопросов
+                        base_delay = (user.get('solve_delay', 15) * 60) / 20 # сек на вопрос в среднем
+                        jitter = random.uniform(0.5, 1.5)
+                        wait_sec = max(2, min(45, base_delay * jitter))
+                        
+                        if status_callback: await status_callback(f"{p_text}⏳ Размышляю {int(wait_sec)} сек...")
+                        await asyncio.sleep(wait_sec)
+                        
                         await self._human_click(page, options_elements[idx])
-                        await asyncio.sleep(1)
+                        await asyncio.sleep(random.uniform(1.0, 2.5))
                     
                     await self._random_scroll(page)
                     
