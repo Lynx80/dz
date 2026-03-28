@@ -1,0 +1,256 @@
+{
+  "total_count": 8,
+  "response": [
+    {
+      "id": 183048082,
+      "source_id": "183048082",
+      "source": "PLAN",
+      "start_at": "2026-03-18T09:50:00+03:00",
+      "finish_at": "2026-03-18T10:30:00+03:00",
+      "cancelled": false,
+      "lesson_type": "REMOTE",
+      "course_lesson_type": null,
+      "lesson_form": null,
+      "replaced": false,
+      "room_name": "Кабинет географии",
+      "room_number": "307",
+      "subject_id": 33623620,
+      "subject_name": "География",
+      "link_to_join": "https://authedu.mosreg.ru//vcs/183048082?source_id=1",
+      "health_status": null,
+      "absence_reason_id": null,
+      "nonattendance_reason_id": null,
+      "homework": {
+        "presence_status_id": 3,
+        "total_count": 1,
+        "execute_count": 0,
+        "descriptions": [
+          "Изучите конспект урока по ссылке https://resh.edu.ru/subject/lesson/5440/conspect/202144/  и выполните задание ниже в файле по данному конспекту. После выполнения заданий, отправьте их на почту getverba@mail.com, либо личным сообщение в мессенджере MAX . при отправлении заданий указывайте ФИО и класс в теме письма или в сообщениях в максе"
+        ],
+        "materials": {
+          "count_execute": 0,
+          "count_learn": 0
+        }
+      },
+      "marks": null,
+      "is_missed_lesson": false
+    },
+    {
+      "id": 183048182,
+      "source_id": "183048182",
+      "source": "PLAN",
+      "start_at": "2026-03-18T10:50:00+03:00",
+      "finish_at": "2026-03-18T11:30:00+03:00",
+      "cancelled": false,
+      "lesson_type": "REMOTE",
+      "course_lesson_type": null,
+      "lesson_form": null,
+      "replaced": false,
+      "room_name": "Кабинет истории и обществознания",
+      "room_number": "305",
+      "subject_id": 36718446,
+      "subject_name": "Практикум по обществознанию",
+      "link_to_join": "https://authedu.mosreg.ru//vcs/183048182?source_id=1",
+      "health_status": null,
+      "absence_reason_id": null,
+      "nonattendance_reason_id": null,
+      "homework": {
+        "presence_status_id": 2,
+        "total_count": 0,
+        "execute_count": 0,
+        "descriptions": [],
+        "materials": null
+      },
+      "marks": null,
+      "is_missed_lesson": false
+    },
+    {
+      "id": 183048075,
+      "source_id": "183048075",
+      "source": "PLAN",
+      "start_at": "2026-03-18T11:50:00+03:00",
+      "finish_at": "2026-03-18T12:30:00+03:00",
+      "cancelled": false,
+      "lesson_type": "REMOTE",
+      "course_lesson_type": null,
+      "lesson_form": null,
+      "replaced": false,
+      "room_name": "Кабинет начальных классов",
+      "room_number": "119",
+      "subject_id": 33623580,
+      "subject_name": "Физическая культура",
+      "link_to_join": "https://authedu.mosreg.ru//vcs/183048075?source_id=1",
+      "health_status": null,
+      "absence_reason_id": null,
+      "nonattendance_reason_id": null,
+      "homework": {
+        "presence_status_id": 3,
+        "total_count": 1,
+        "execute_count": 0,
+        "descriptions": [
+          "Прикреплённое задание"
+        ],
+        "materials": {
+          "count_execute": 0,
+          "count_learn": 0
+        }
+      },
+      "marks": null,
+      "is_missed_lesson": false
+    },
+    {
+      "id": 183048245,
+      "source_id": "183048245",
+      "source": "PLAN",
+      "start_at": "2026-03-18T12:40:00+03:00",
+      "finish_at": "2026-03-18T13:20:00+03:00",
+      "cancelled": false,
+      "lesson_type": "REMOTE",
+      "course_lesson_type": null,
+      "lesson_form": null,
+      "replaced": false,
+      "room_name": "Кабинет истории и обществознания",
+      "room_number": "305",
+      "subject_id": 36718446,
+      "subject_name": "Практикум по обществознанию",
+      "link_to_join": "https://authedu.mosreg.ru//vcs/183048245?source_id=1",
+      "health_status": null,
+      "absence_reason_id": null,
+      "nonattendance_reason_id": null,
+      "homework": {
+        "presence_status_id": 2,
+        "total_count": 0,
+        "execute_count": 0,
+        "descriptions": [],
+        "materials": null
+      },
+      "marks": null,
+      "is_missed_lesson": false
+    },
+    {
+      "id": 183048264,
+      "source_id": "183048264",
+      "source": "PLAN",
+      "start_at": "2026-03-18T13:30:00+03:00",
+      "finish_at": "2026-03-18T14:10:00+03:00",
+      "cancelled": false,
+      "lesson_type": "REMOTE",
+      "course_lesson_type": null,
+      "lesson_form": null,
+      "replaced": false,
+      "room_name": "Кабинет русского языка и литературы",
+      "room_number": "176",
+      "subject_id": 33623617,
+      "subject_name": "Литература",
+      "link_to_join": "https://authedu.mosreg.ru//vcs/183048264?source_id=1",
+      "health_status": null,
+      "absence_reason_id": null,
+      "nonattendance_reason_id": null,
+      "homework": {
+        "presence_status_id": 3,
+        "total_count": 1,
+        "execute_count": 0,
+        "descriptions": [
+          "Выполнить тесты по ссылкам  \nhttps://videouroki.net/tests/939872999/\nhttps://videouroki.net/tests/628623254/"
+        ],
+        "materials": {
+          "count_execute": 0,
+          "count_learn": 0
+        }
+      },
+      "marks": null,
+      "is_missed_lesson": false
+    },
+    {
+      "id": 183048265,
+      "source_id": "183048265",
+      "source": "PLAN",
+      "start_at": "2026-03-18T14:30:00+03:00",
+      "finish_at": "2026-03-18T15:10:00+03:00",
+      "cancelled": false,
+      "lesson_type": "REMOTE",
+      "course_lesson_type": null,
+      "lesson_form": null,
+      "replaced": false,
+      "room_name": "Кабинет русского языка и литературы",
+      "room_number": "176",
+      "subject_id": 33623617,
+      "subject_name": "Литература",
+      "link_to_join": "https://authedu.mosreg.ru//vcs/183048265?source_id=1",
+      "health_status": null,
+      "absence_reason_id": null,
+      "nonattendance_reason_id": null,
+      "homework": {
+        "presence_status_id": 3,
+        "total_count": 1,
+        "execute_count": 0,
+        "descriptions": [
+          "Выполнить тесты по ссылкам  \nhttps://videouroki.net/tests/939872999/\nhttps://videouroki.net/tests/628623254/"
+        ],
+        "materials": {
+          "count_execute": 0,
+          "count_learn": 0
+        }
+      },
+      "marks": null,
+      "is_missed_lesson": false
+    },
+    {
+      "id": 183048074,
+      "source_id": "183048074",
+      "source": "PLAN",
+      "start_at": "2026-03-18T15:20:00+03:00",
+      "finish_at": "2026-03-18T16:00:00+03:00",
+      "cancelled": false,
+      "lesson_type": "REMOTE",
+      "course_lesson_type": null,
+      "lesson_form": null,
+      "replaced": false,
+      "room_name": "Кабинет английского языка",
+      "room_number": "249",
+      "subject_id": 33623661,
+      "subject_name": "Английский язык",
+      "link_to_join": "https://authedu.mosreg.ru//vcs/183048074?source_id=1",
+      "health_status": null,
+      "absence_reason_id": null,
+      "nonattendance_reason_id": null,
+      "homework": {
+        "presence_status_id": 3,
+        "total_count": 1,
+        "execute_count": 0,
+        "descriptions": [
+          "Выполнить прикреплённый тест, который доступен из приложения \"Моя Школа.Госуслуги\" по ссылке  https://gosuslugi.ru/edu-content/get-access?orderExtId=149677_88801678-c934-11f0-967a-c215bb784943\n Не забудьте прикрепить скрин"
+        ],
+        "materials": {
+          "count_execute": 0,
+          "count_learn": 0
+        }
+      },
+      "marks": null,
+      "is_missed_lesson": false
+    },
+    {
+      "id": 22709824,
+      "source_id": "22709824",
+      "source": "EC",
+      "start_at": "2026-03-18T16:10:00+03:00",
+      "finish_at": "2026-03-18T16:50:00+03:00",
+      "room_name": "Кабинет музыки",
+      "room_number": "211",
+      "subject_name": "10 м медиаклуб",
+      "health_status": null,
+      "absence_reason_id": null,
+      "nonattendance_reason_id": null,
+      "homework": {
+        "presence_status_id": 2,
+        "total_count": 0,
+        "execute_count": 0,
+        "descriptions": [],
+        "materials": null
+      },
+      "marks": null,
+      "is_missed_lesson": false
+    }
+  ],
+  "errors": null
+}
