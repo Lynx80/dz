@@ -1,6 +1,11 @@
 .env
 database.db
+dnevnik.db
+users.db
+*.log
+*.txt
 __pycache__/
 *.pyc
 .vscode/
 .idea/
+archive/
