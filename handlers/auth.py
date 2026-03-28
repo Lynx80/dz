@@ -2,13 +2,14 @@ from aiogram import Router, types, F
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
-from database.db_service import save_user_token, update_user_profile
-from services.school_api import SchoolAPI
+from utils.states import BotStates
+from database.db import Database
+from services.parser import ParserService, MosregAuthError
+from keyboards.reply import get_main_menu_kb
 
 router = Router()
-
-class AuthStates(StatesGroup):
-    waiting_token = State()
+db = Database()
+parser = ParserService()
 
 @router.message(F.text == "⚙️ Настройки")
 async def settings_menu(message: types.Message, state: FSMContext):
@@ -33,33 +34,37 @@ async def settings_menu(message: types.Message, state: FSMContext):
         "3. Просто отправь его мне в чат!",
         reply_markup=builder.as_markup()
     )
-    await state.set_state(AuthStates.waiting_token)
+    await state.set_state(BotStates.waiting_for_token)
 
 @router.message(F.text.startswith("eyJ"))
 async def handle_token_input(message: types.Message, state: FSMContext):
-    token = message.text.strip()
-    await save_user_token(message.from_user.id, token)
+    token = message.text.strip().strip('"')
     
     msg = await message.answer("🔄 Проверяю токен и загружаю ваш профиль...")
     
-    # Пытаемся получить профиль сразу
-    api = SchoolAPI(token)
-    profile = await api.get_profile()
-    
-    if profile:
-        await update_user_profile(
-            message.from_user.id, 
-            profile["first_name"], 
-            profile["last_name"], 
-            profile["class_name"]
+    try:
+        user_info = await parser.fetch_mosreg_profile(token)
+        # Сохраняем/обновляем пользователя в едином формате БД
+        await db.create_user(
+            message.from_user.id,
+            first_name=user_info.get('first_name'),
+            last_name=user_info.get('last_name'),
+            grade=user_info.get('grade'),
+            student_id=user_info.get('student_id'),
+            mesh_id=user_info.get('mesh_id')
         )
+        await db.update_user(message.from_user.id, token_mos=token)
+        
         await msg.edit_text(
             f"✅ Авторизация успешна!\n\n"
-            f"👤 **Ученик**: {profile['last_name']} {profile['first_name']}\n"
-            f"🏫 **Класс**: {profile['class_name']}"
+            f"👤 **Ученик**: {user_info['last_name']} {user_info['first_name']}\n"
+            f"🏫 **Класс**: {user_info['grade']}\n\n"
+            "Теперь я вижу твое ДЗ и готов его решать! 🚀"
         )
-    else:
-        await msg.edit_text("⚠️ Токен сохранен, но не удалось загрузить данные профиля. "
-                           "Возможно, нужно подождать или попробовать другой регион.")
-    
-    await state.clear()
+        await message.answer("Воспользуйтесь меню ниже:", reply_markup=get_main_menu_kb())
+        await state.clear()
+        
+    except MosregAuthError:
+        await msg.edit_text("❌ Токен недействителен или истек. Получите новый токен и попробуйте снова.")
+    except Exception as e:
+        await msg.edit_text(f"❌ Ошибка авторизации: {str(e)[:100]}")

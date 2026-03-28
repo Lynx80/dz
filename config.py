@@ -4,7 +4,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # Bot Settings
-API_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "8684063011:AAG5xtd4MfZLIc3FvGbXCABLnh-hcpieR_U")
+API_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "8684063011:AAHpBjpulnliaz2-Qnnvh_DPUwQaNygj8lg")
 PROXY_URL = os.getenv("TELEGRAM_PROXY")
 
 # Database

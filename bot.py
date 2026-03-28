@@ -28,7 +28,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Инициализация бота и БД
-API_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "8684063011:AAG5xtd4MfZLIc3FvGbXCABLnh-hcpieR_U")
+API_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "8684063011:AAHpBjpulnliaz2-Qnnvh_DPUwQaNygj8lg")
 PROXY_URL = os.getenv("TELEGRAM_PROXY")
 
 if PROXY_URL:
@@ -285,19 +285,6 @@ def classify_hw(desc: str, url: str) -> tuple[str, str]:
 async def check_token(message: types.Message, user):
     if not user or not user.get('token_mos'):
         help_text = (
-            "⚠️ ТОКЕН НЕ ЗАГРУЖЕН!\n\n"
-            "Токен — это твой цифровой ключ! Он дает боту доступ к тестам! 🔑\n\n"
-            "Как получить токен:\n\n"
-            "1️⃣ Перейди по ссылке:\n"
-            "- [Москва](https://school.mos.ru/?backUrl=https%3A%2F%2Fschool.mos.ru%2Fv2%2Ftoken%2Frefresh)\n"
-            "- Для Московской области:\n"
-            "  • [Войти в аккаунт](https://authedu.mosreg.ru/50/)\n"
-            "  • [Получить токен](https://authedu.mosreg.ru/v2/token/refresh)\n\n"
-            "2️⃣ Введи логин и пароль от своего аккаунта.\n"
-            "(Не волнуйся, мы их не видим — это только для системы! 🔒)\n\n"
-            "3️⃣ Скопируй токен с открывшейся страницы.\n"
-            "(Он начинается с 'eyJhbG...')\n\n"
-            "4️⃣ Отправь токен сюда, и наш бот сразу приступит к работе! 🚀\n\n"
             "P.S. Без токена — никаких тестов. Так что действуй! 🔥\n"
             "Для МО обязательно сначала войти в аккаунт, а потом получить токен!"
         )
@@ -438,8 +425,8 @@ async def show_day_homework(message: types.Message, user: dict, date_str: str, s
             text_parts.append("   └ 🕊️ <i>Без ДЗ</i>\n")
         else:
             desc = hw_item['description'].strip()
-            found_links = re.findall(r'https?://\S+', desc)
-            clean_desc = re.sub(r'https?://\S+', '', desc).strip('; ')
+            found_links = [l.rstrip('.;:,') for l in re.findall(r'https?://\S+', desc)]
+            clean_desc = re.sub(r'https?://\S+', '', desc).strip('; .')
             clean_desc = re.sub(r':\s*$', '', clean_desc).strip()
             
             # --- ПРОВЕРКА НА ПОВТОР ДЗ ---

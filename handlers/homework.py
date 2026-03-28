@@ -187,8 +187,8 @@ async def show_day_homework(message, user_id, date_str, page=0, force_refresh=Fa
                     text += "   <blockquote>👆 <i>Задание такое же, как выше</i></blockquote>\n"
                 else:
                     # Извлекаем ссылки
-                    links = re.findall(r'https?://[^\s<>"]+', hw_desc)
-                    clean_desc = re.sub(r'https?://[^\s<>"]+', '', hw_desc).strip('; ')
+                    links = [l.rstrip('.;:,') for l in re.findall(r'https?://[^\s<>"]+', hw_desc)]
+                    clean_desc = re.sub(r'https?://[^\s<>"]+', '', hw_desc).strip('; .')
                     
                     text += f"   <blockquote>{html.escape(clean_desc or 'Задание в материалах')}</blockquote>"
                     

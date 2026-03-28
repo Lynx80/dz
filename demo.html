@@ -1,0 +1,543 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <title>DZ Helper - Demo</title>
+    <style>
+        :root {
+            --bg-color: #f0f2f5;
+            --secondary-bg: #ffffff;
+            --text-color: #222222;
+            --hint-color: #707579;
+            --link-color: #2481cc;
+            --button-color: #2481cc;
+            --button-text-color: #ffffff;
+            --accent-color: #2481cc;
+            --success-color: #4CAF50;
+            --warning-color: #FF9800;
+            --danger-color: #f44336;
+            --card-shadow: 0 4px 15px rgba(0,0,0,0.05);
+            --header-bg: #2481cc;
+        }
+
+        body.dark {
+            --bg-color: #1c1c1d;
+            --secondary-bg: #2b2b2c;
+            --text-color: #ffffff;
+            --hint-color: #aaaaaa;
+            --link-color: #64b5f6;
+            --header-bg: #1c1c1d;
+            --card-shadow: 0 4px 15px rgba(0,0,0,0.3);
+        }
+
+        * {
+            box-sizing: border-box;
+            -webkit-tap-highlight-color: transparent;
+        }
+
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-color);
+            margin: 0;
+            padding: 0;
+            overflow-x: hidden;
+            transition: background-color 0.3s ease;
+        }
+
+        #app {
+            max-width: 600px;
+            margin: 0 auto;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            padding-bottom: 20px;
+        }
+
+        /* --- UI ELEMENTS --- */
+
+        .header {
+            padding: 20px;
+            background-color: var(--header-bg);
+            color: #fff;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            border-bottom-left-radius: 24px;
+            border-bottom-right-radius: 24px;
+            box-shadow: 0 4px 10px rgba(0,0,0,0.1);
+            position: sticky;
+            top: 0;
+            z-index: 100;
+        }
+
+        .user-block {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .avatar {
+            width: 44px;
+            height: 44px;
+            background: linear-gradient(135deg, #6dd5ed, #2193b0);
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: bold;
+            font-size: 1.2rem;
+            color: white;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+        }
+
+        .welcome-msg .hi { font-size: 0.8rem; opacity: 0.8; display: block; }
+        .welcome-msg .name { font-weight: 700; font-size: 1.1rem; }
+
+        .btn-icon {
+            background: rgba(255,255,255,0.2);
+            border: none;
+            width: 36px;
+            height: 36px;
+            border-radius: 10px;
+            color: white;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+        }
+
+        /* --- TABS --- */
+        .nav-tabs {
+            display: flex;
+            padding: 15px 20px;
+            gap: 10px;
+            overflow-x: auto;
+            scrollbar-width: none;
+        }
+        .nav-tabs::-webkit-scrollbar { display: none; }
+
+        .tab-btn {
+            padding: 8px 16px;
+            background: var(--secondary-bg);
+            border: none;
+            border-radius: 12px;
+            color: var(--hint-color);
+            font-weight: 500;
+            white-space: nowrap;
+            cursor: pointer;
+            box-shadow: var(--card-shadow);
+            transition: all 0.2s;
+        }
+
+        .tab-btn.active {
+            background: var(--button-color);
+            color: white;
+        }
+
+        /* --- CONTENT --- */
+        .tab-content {
+            padding: 0 20px;
+            flex: 1;
+        }
+
+        .tab-pane { display: none; margin-bottom: 40px; }
+        .tab-pane.active { display: block; animation: fadeIn 0.3s ease; }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        /* --- DASHBOARD --- */
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 12px;
+            margin-top: 10px;
+        }
+
+        .stat-card {
+            background: var(--secondary-bg);
+            padding: 15px 10px;
+            border-radius: 16px;
+            text-align: center;
+            box-shadow: var(--card-shadow);
+        }
+
+        .stat-card .val { font-weight: 800; font-size: 1.2rem; display: block; color: var(--accent-color); }
+        .stat-card .lbl { font-size: 0.7rem; color: var(--hint-color); text-transform: uppercase; margin-top: 4px; }
+
+        .progress-box {
+            background: var(--secondary-bg);
+            margin-top: 20px;
+            padding: 20px;
+            border-radius: 20px;
+            box-shadow: var(--card-shadow);
+        }
+
+        .progress-header { display: flex; justify-content: space-between; font-weight: 600; margin-bottom: 10px; font-size: 0.9rem; }
+        .progress-bg { height: 8px; background: rgba(0,0,0,0.05); border-radius: 4px; overflow: hidden; }
+        .progress-fill { height: 100%; background: linear-gradient(90deg, #4CAF50, #8BC34A); border-radius: 4px; transition: width 0.5s ease; }
+
+        .card-list { margin-top: 20px; display: flex; flex-direction: column; gap: 15px; }
+
+        .lesson-card {
+            background: var(--secondary-bg);
+            padding: 15px;
+            border-radius: 16px;
+            display: flex;
+            gap: 15px;
+            box-shadow: var(--card-shadow);
+            cursor: pointer;
+            transition: transform 0.2s;
+        }
+        .lesson-card:active { transform: scale(0.98); }
+
+        .lesson-time { font-size: 0.75rem; color: var(--hint-color); min-width: 50px; text-align: center; }
+        .lesson-time .room { display: block; margin-top: 4px; color: var(--accent-color); font-weight: 600; }
+
+        .lesson-info { flex: 1; }
+        .lesson-title { font-weight: 700; font-size: 0.95rem; margin-bottom: 4px; }
+        .lesson-hw { font-size: 0.8rem; color: var(--hint-color); line-height: 1.3; }
+
+        .status-badge { width: 10px; height: 10px; border-radius: 50%; align-self: center; }
+        .status-badge.pending { background-color: var(--warning-color); box-shadow: 0 0 5px var(--warning-color); }
+        .status-badge.done { background-color: var(--success-color); box-shadow: 0 0 5px var(--success-color); }
+
+        /* --- CALENDAR --- */
+        .date-nav {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            background: var(--secondary-bg);
+            padding: 12px 15px;
+            border-radius: 16px;
+            margin-bottom: 20px;
+            box-shadow: var(--card-shadow);
+        }
+        .date-nav .current { font-weight: 700; color: var(--accent-color); }
+
+        /* --- AUTH --- */
+        .auth-view {
+            text-align: center;
+            padding: 40px 20px;
+        }
+        .auth-icon { font-size: 4rem; margin-bottom: 20px; }
+        .auth-title { font-size: 1.4rem; font-weight: 800; margin-bottom: 10px; }
+        .auth-desc { color: var(--hint-color); font-size: 0.9rem; margin-bottom: 30px; }
+
+        .auth-btn {
+            background: var(--secondary-bg);
+            padding: 15px;
+            border-radius: 16px;
+            margin-bottom: 15px;
+            display: flex;
+            align-items: center;
+            gap: 15px;
+            box-shadow: var(--card-shadow);
+            text-align: left;
+            width: 100%;
+            border: none;
+            cursor: pointer;
+            color: var(--text-color);
+        }
+        .auth-btn .icon { font-size: 1.5rem; }
+        .auth-btn .tit { display: block; font-weight: 700; }
+        .auth-btn .sub { font-size: 0.8rem; color: var(--hint-color); }
+
+        .btn-big {
+            background: var(--button-color);
+            color: white;
+            padding: 15px;
+            border-radius: 16px;
+            border: none;
+            width: 100%;
+            font-weight: 700;
+            font-size: 1rem;
+            margin-top: 20px;
+            box-shadow: 0 4px 15px rgba(36, 129, 204, 0.3);
+            cursor: pointer;
+        }
+
+        /* --- BOTTOM SHEET --- */
+        .overlay {
+            position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(0,0,0,0.5);
+            display: none;
+            z-index: 1000;
+            opacity: 0;
+            transition: opacity 0.3s;
+        }
+        .overlay.active { display: block; opacity: 1; }
+
+        .bottom-sheet {
+            position: fixed;
+            bottom: -100%;
+            left: 0; right: 0;
+            background: var(--secondary-bg);
+            border-top-left-radius: 24px;
+            border-top-right-radius: 24px;
+            padding: 30px 20px 40px;
+            z-index: 1001;
+            transition: bottom 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            max-width: 600px;
+            margin: 0 auto;
+        }
+        .bottom-sheet.active { bottom: 0; }
+
+        .handle {
+            width: 40px; height: 4px; background: rgba(0,0,0,0.1); border-radius: 2px;
+            margin: -15px auto 20px;
+        }
+
+        .bs-title { font-weight: 800; font-size: 1.3rem; margin-bottom: 15px; }
+        .bs-text { font-size: 1rem; line-height: 1.5; color: var(--hint-color); margin-bottom: 25px; }
+
+        /* --- ANIMATIONS --- */
+        .toast {
+            position: fixed;
+            bottom: 30px;
+            left: 50%;
+            transform: translateX(-50%) translateY(100px);
+            background: #333;
+            color: white;
+            padding: 12px 24px;
+            border-radius: 50px;
+            font-size: 0.9rem;
+            z-index: 2000;
+            transition: transform 0.3s cubic-bezier(0.18, 0.89, 0.32, 1.28);
+            box-shadow: 0 5px 15px rgba(0,0,0,0.3);
+        }
+        .toast.show { transform: translateX(-50%) translateY(0); }
+    </style>
+</head>
+<body>
+    <div id="app">
+        <!-- Header -->
+        <header class="header">
+            <div class="user-block">
+                <div class="avatar">А</div>
+                <div class="welcome-msg">
+                    <span class="hi">С возвращением!</span>
+                    <span class="name">Александр Иванов</span>
+                </div>
+            </div>
+            <button class="btn-icon" id="theme-toggle">🌙</button>
+        </header>
+
+        <!-- Tabs -->
+        <nav class="nav-tabs">
+            <button class="tab-btn active" data-tab="dashboard">📊 Главная</button>
+            <button class="tab-btn" data-tab="schedule">📅 Календарь</button>
+            <button class="tab-btn" data-tab="profile">👤 Настройки</button>
+            <button class="tab-btn" data-tab="auth">🔑 Доступ</button>
+        </nav>
+
+        <!-- Main Content -->
+        <div class="tab-content">
+            <!-- Dashboard -->
+            <div class="tab-pane active" id="dashboard">
+                <div class="stats-grid">
+                    <div class="stat-card">
+                        <span class="val">142</span>
+                        <span class="lbl">Решено</span>
+                    </div>
+                    <div class="stat-card">
+                        <span class="val">4.9</span>
+                        <span class="lbl">Ср. балл</span>
+                    </div>
+                    <div class="stat-card">
+                        <span class="val">1.2к</span>
+                        <span class="lbl">Сэконом.</span>
+                    </div>
+                </div>
+
+                <div class="progress-box">
+                    <div class="progress-header">
+                        <span>Прогресс за сегодня</span>
+                        <span>75%</span>
+                    </div>
+                    <div class="progress-bg">
+                        <div class="progress-fill" style="width: 75%"></div>
+                    </div>
+                </div>
+
+                <div class="card-list">
+                    <div class="lesson-card" onclick="openHW('Математика', 'Сделать задачи №12-18 на странице 54. Прислать фото решения до завтра.')">
+                        <div class="lesson-time">
+                            08:30
+                            <span class="room">к. 312</span>
+                        </div>
+                        <div class="lesson-info">
+                            <div class="lesson-title">Математика</div>
+                            <div class="lesson-hw">Задачи №12-18 на странице 54...</div>
+                        </div>
+                        <div class="status-badge pending"></div>
+                    </div>
+
+                    <div class="lesson-card" onclick="openHW('Русский язык', 'Прочитать параграф 7, ответить на вопросы в конце текста устно.')">
+                        <div class="lesson-time">
+                            09:25
+                            <span class="room">к. 104</span>
+                        </div>
+                        <div class="lesson-info">
+                            <div class="lesson-title">Русский язык</div>
+                            <div class="lesson-hw">Прочитать параграф 7, ответить...</div>
+                        </div>
+                        <div class="status-badge done"></div>
+                    </div>
+
+                    <div class="lesson-card" onclick="openHW('История', 'Пройти онлайн-тест на платформе МЭШ по теме «Первая мировая война».')">
+                        <div class="lesson-time">
+                            10:30
+                            <span class="room">к. 205</span>
+                        </div>
+                        <div class="lesson-info">
+                            <div class="lesson-title">История</div>
+                            <div class="lesson-hw">Пройти онлайн-тест МЭШ...</div>
+                        </div>
+                        <div class="status-badge pending"></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Schedule -->
+            <div class="tab-pane" id="schedule">
+                <div class="date-nav">
+                    <span>⬅️</span>
+                    <span class="current">28 Марта, Суббота</span>
+                    <span>➡️</span>
+                </div>
+                <div class="card-list" id="schedule-list">
+                    <!-- Similar cards here -->
+                    <p style="text-align: center; color: var(--hint-color); padding: 20px;">На выходные заданий меньше, отдыхай! 🎮</p>
+                </div>
+            </div>
+
+            <!-- Profile -->
+            <div class="tab-pane" id="profile">
+                <h3>Настройки AI</h3>
+                <div class="stat-card" style="text-align: left; margin-bottom: 20px;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
+                        <span>Точность решения</span>
+                        <span style="color: var(--accent-color); font-weight: bold;">Идеальная (95%)</span>
+                    </div>
+                    <div style="display: flex; justify-content: space-between; align-items: center;">
+                        <span>Время ожидания</span>
+                        <span style="color: var(--accent-color); font-weight: bold;">15 мин</span>
+                    </div>
+                </div>
+                <h3>Профиль</h3>
+                <div class="stat-card" style="text-align: left;">
+                    <p><strong>Класс:</strong> 11 "А"</p>
+                    <p><strong>ID:</strong> 8684063011</p>
+                    <p><strong>Статус:</strong> ✅ Премиум</p>
+                </div>
+                <button class="btn-big" style="background: var(--danger-color); box-shadow: none;">Выйти из аккаунта</button>
+            </div>
+
+            <!-- Auth -->
+            <div class="tab-pane" id="auth">
+                <div class="auth-view">
+                    <div class="auth-icon">🚀</div>
+                    <div class="auth-title">Подключи дневник</div>
+                    <div class="auth-desc">Выберите способ авторизации, чтобы бот получил доступ к вашим заданиям.</div>
+                    
+                    <button class="auth-btn" id="btn-qr">
+                        <span class="icon">📸</span>
+                        <div class="text">
+                            <span class="tit">Через QR-код</span>
+                            <span class="sub">Быстро и безопасно</span>
+                        </div>
+                    </button>
+
+                    <button class="auth-btn" id="btn-token">
+                        <span class="icon">⌨️</span>
+                        <div class="text">
+                            <span class="tit">Ручной ввод</span>
+                            <span class="sub">Если не работает камера</span>
+                        </div>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Bottom Sheet -->
+    <div class="overlay" id="overlay"></div>
+    <div class="bottom-sheet" id="sheet">
+        <div class="handle"></div>
+        <div class="bs-title" id="hw-title">Задание</div>
+        <div class="bs-text" id="hw-text">...</div>
+        <button class="btn-big" id="solve-btn">🚀 РЕШИТЬ С ПОМОЩЬЮ ИИ</button>
+    </div>
+
+    <!-- Toast -->
+    <div class="toast" id="toast">Готово!</div>
+
+    <script>
+        // Tab switching
+        const tabs = document.querySelectorAll('.tab-btn');
+        tabs.forEach(tab => {
+            tab.addEventListener('click', () => {
+                tabs.forEach(t => t.classList.remove('active'));
+                tab.classList.add('active');
+                
+                document.querySelectorAll('.tab-pane').forEach(p => p.classList.remove('active'));
+                document.getElementById(tab.dataset.tab).classList.add('active');
+            });
+        });
+
+        // Bottom sheet logic
+        const sheet = document.getElementById('sheet');
+        const overlay = document.getElementById('overlay');
+        const hwTitle = document.getElementById('hw-title');
+        const hwText = document.getElementById('hw-text');
+
+        function openHW(title, text) {
+            hwTitle.innerText = title;
+            hwText.innerText = text;
+            overlay.classList.add('active');
+            sheet.classList.add('active');
+        }
+
+        function closeHW() {
+            overlay.classList.remove('active');
+            sheet.classList.remove('active');
+        }
+
+        overlay.addEventListener('click', closeHW);
+
+        // Toast logic
+        const solveBtn = document.getElementById('solve-btn');
+        solveBtn.addEventListener('click', () => {
+            closeHW();
+            showToast('Задача отправлена на решение!');
+        });
+
+        function showToast(msg) {
+            const toast = document.getElementById('toast');
+            toast.innerText = msg;
+            toast.classList.add('show');
+            setTimeout(() => toast.classList.remove('show'), 3000);
+        }
+
+        // Theme toggle
+        const themeToggle = document.getElementById('theme-toggle');
+        themeToggle.addEventListener('click', () => {
+            document.body.classList.toggle('dark');
+            themeToggle.innerText = document.body.classList.contains('dark') ? '☀️' : '🌙';
+        });
+
+        // Auth mocks
+        document.getElementById('btn-qr').addEventListener('click', () => showToast('Камера запущена...'));
+        document.getElementById('btn-token').addEventListener('click', () => {
+            const token = prompt('Введите Access Token:');
+            if(token) showToast('Авторизация выполнена!');
+        });
+    </script>
+</body>
+</html>

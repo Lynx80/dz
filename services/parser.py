@@ -21,10 +21,20 @@ class MosregAuthError(Exception):
     pass
 
 class ParserService:
-    def __init__(self, session=None):
+    _instance = None
+    
+    def __new__(cls, *args, **kwargs):
+        if cls._instance is None:
+            cls._instance = super(ParserService, cls).__new__(cls)
+            cls._instance._initialized = False
+        return cls._instance
+
+    def __init__(self, db=None):
+        if self._initialized:
+            return
         self.ai = AIService()
-        self.db = Database()
-        self.session = session
+        self.db = db or Database()
+        self.session = None
         self._cache = {} # (key): {data: ..., expiry: ...}
         self.base_headers = {
             'User-Agent': 'Mozilla/5.0 (Linux; Android 13; SM-A525F Build/TP1A.220624.014; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/116.0.0.0 Mobile Safari/537.36',
@@ -36,6 +46,9 @@ class ParserService:
         self.last_profile_id = None
         self.active_browsers = {} # {user_id: {'browser': ..., 'context': ..., 'page': ...}}
         if not os.path.exists("sessions"): os.makedirs("sessions")
+        # Initialize browser proxy
+        self.browser_proxy = os.getenv("BROWSER_PROXY")
+        self._initialized = True
 
     async def _get_browser_context(self, p, user_id, headless=True):
         user_data_dir = await self.db.get_browser_session(user_id)
@@ -713,12 +726,13 @@ class ParserService:
         if accuracy_mode: user['accuracy_mode'] = accuracy_mode
         if solve_delay_mins: user['solve_delay'] = solve_delay_mins
 
-        if "videouroki.net" in test_url:
+        if any(kw in test_url for kw in ["videouroki.net", "videouroki.org"]):
             return await self._solve_videouroki(user, test_url, status_callback, screenshot_callback)
-        elif "mesh.mos.ru" in test_url or "school.mos.ru" in test_url:
+        elif any(kw in test_url for kw in ["mesh.mos.ru", "school.mos.ru", "myschool.mosreg.ru", "gosuslugi.ru", "esia.gosuslugi.ru"]):
             return await self._solve_mesh(user, test_url, status_callback, screenshot_callback)
         else:
-            return "Ошибка: Данная платформа пока не поддерживается.", None
+            domain = test_url.split("//")[-1].split("/")[0]
+            return f"❌ Сайт <b>{domain}</b> в настоящий момент не поддерживается AI-решателем. Мы работаем над добавлением новых платформ! 🚀", None
 
     async def get_test_limit(self, test_url):
         """Пытается определить ограничение по времени на тест."""
@@ -871,7 +885,7 @@ class ParserService:
                     except: pass
 
 
-    async def init_qr_login(self, user_id):
+    async def init_qr_login(self, user_id, start_url=None):
         """Инициализирует вход через QR-код с использованием персистентной сессии."""
         if not os.path.exists("tmp"): os.makedirs("tmp")
         
@@ -885,21 +899,43 @@ class ParserService:
         page = context.pages[0] if context.pages else await context.new_page()
         
         try:
-            # Переход на страницу логина
-            await page.goto("https://myschool.mosreg.ru/login", wait_until="networkidle", timeout=60000)
-            await asyncio.sleep(2)
+            # 1. Переход по указанной ссылке
+            await page.set_viewport_size({'width': 1280, 'height': 800})
+            target_url = start_url or "https://myschool.mosreg.ru/login"
+            logger.info(f"QR Init: Navigating to {target_url}")
+            await page.goto(target_url, wait_until="domcontentloaded", timeout=60000)
+            await asyncio.sleep(5)
             
-            qr_btn = await page.query_selector("button:has-text('QR'), .qr-login-btn, [data-test-id='qr-login']")
-            if qr_btn:
-                await qr_btn.click()
-                await asyncio.sleep(2)
+            # 2. Ждем любой намек на QR-код (canvas или img или селекторы Госуслуг)
+            # Если QR сразу на странице, wait_for_selector сработает мгновенно
+            qr_selectors = [
+                 "canvas", "img[alt*='QR']", ".qr-code", ".qr-image", 
+                 "img[src*='qr']", "[class*='qr']", ".qr-code canvas"
+            ]
             
-            qr_selector = "img[alt*='QR'], .qr-code, canvas, [data-test-id='qr-code']"
-            qr_elem = await page.wait_for_selector(qr_selector, timeout=15000)
+            qr_elem = None
+            for selector in qr_selectors:
+                try:
+                    qr_elem = await page.wait_for_selector(selector, timeout=5000)
+                    if qr_elem: 
+                        logger.info(f"Found QR element with selector: {selector}")
+                        break
+                except:
+                    continue
+            
+            # 3. Если не нашли QR прицельно - пробуем кликнуть на вкладку (на всякий случай для общих страниц)
+            if not qr_elem and "esia.gosuslugi.ru" in page.url:
+                qr_tab = await page.query_selector("button:has-text('QR-код'), .qr-tab-btn")
+                if qr_tab:
+                    await qr_tab.click()
+                    await asyncio.sleep(2)
+                    qr_elem = await page.wait_for_selector("canvas, .qr-code", timeout=5000)
             
             path = f"tmp/qr_{user_id}.png"
-            if qr_elem: await qr_elem.screenshot(path=path)
-            else: await page.screenshot(path=path)
+            if qr_elem: 
+                await qr_elem.screenshot(path=path)
+            else: 
+                await page.screenshot(path=path) # Скриншот страницы целиком как запасной вариант
                 
             self.active_browsers[user_id] = {
                 'playwright': p,
@@ -907,6 +943,7 @@ class ParserService:
                 'page': page,
                 'started_at': datetime.now()
             }
+            logger.info(f"QR Capture finished for user {user_id}")
             return path
         except Exception as e:
             logger.error(f"QR Init error: {e}")
@@ -919,28 +956,36 @@ class ParserService:
     async def check_qr_login_status(self, user_id):
         """Проверяет, произошел ли вход после сканирования QR."""
         if user_id not in self.active_browsers:
+            logger.info(f"QR Check: no active session for {user_id}")
             return "expired", None
             
         session = self.active_browsers[user_id]
         page = session['page']
         
         try:
-            # Проверяем URL и наличие элементов дашборда
             current_url = page.url
-            if "login" not in current_url and any(x in current_url for x in ["diary", "schedule", "profile", "main"]):
+            logger.info(f"QR Polling [{user_id}]: current URL is {current_url}")
+            
+            # Упростка: если мы ушли с Gosuslugi/Login - значит профиль подхвачен
+            on_auth_page = (
+                "login" in current_url or 
+                "auth" in current_url or 
+                "esia.gosuslugi.ru" in current_url or 
+                "edu-content/get-access" in current_url
+            )
+            
+            is_logged_in = not on_auth_page
+            
+            logger.info(f"QR Polling [{user_id}]: on_auth_page={on_auth_page} => is_logged_in={is_logged_in}")
+            
+            if is_logged_in:
                 # Вход выполнен!
-                # Пытаемся вытянуть токен из localStorage или cookies
-                token = await page.evaluate('window.localStorage.getItem("identity") || window.localStorage.getItem("auth-token")')
-                if not token:
-                    cookies = await session['context'].cookies()
-                    # Можем поискать специфическую печеньку
+                logger.info(f"QR Login Success for user {user_id}. Redirected to {current_url}")
+                return "success", None
                 
-                # Получаем профиль для подтверждения
-                # profile_data = ...
-                return "success", token
-                
-            # Проверка на таймаут (5 минут)
-            if datetime.now() - session['started_at'] > timedelta(minutes=5):
+            # Проверка на таймаут (10 минут)
+            if (datetime.now() - session['started_at']).total_seconds() > 600:
+                logger.info(f"QR session timeout for {user_id}")
                 await self.close_qr_session(user_id)
                 return "timeout", None
                 
@@ -1048,9 +1093,10 @@ class ParserService:
             
             # Хранилище ответов для этой сессии
             intercepted_answers = {} # {question_text: correct_option_text}
-            self.detected_total_q = 15
+            local_total_q = 15
             
             async def handle_response(response):
+                nonlocal local_total_q
                 try:
                     url = response.url
                     # Ищем эндпоинты с данными теста (обычно /start или расширенный JSON)
@@ -1060,17 +1106,15 @@ class ParserService:
                         text = await response.text()
                         data = json.loads(text)
                         
-                        # Парсим структуру MESH Challenge
                         tasks = data.get('tasks') or data.get('data', {}).get('tasks') or []
                         if not tasks and 'questions' in data: tasks = data['questions']
                         
                         if tasks:
-                            self.detected_total_q = len(tasks)
-                            logger.info(f"Detected {self.detected_total_q} questions in test.")
+                            local_total_q = len(tasks)
+                            logger.info(f"Detected {local_total_q} questions in test.")
                         
                         for task in tasks:
                             q_text = task.get('question_text') or task.get('text') or ""
-                            # Убираем HTML теги из вопроса
                             q_text = re.sub(r'<[^>]+>', '', q_text).strip()
                             
                             options = task.get('options') or task.get('answers') or []
@@ -1081,20 +1125,41 @@ class ParserService:
                                     if q_text and ans_text:
                                         intercepted_answers[q_text[:200]] = ans_text
                                         logger.info(f"SilentSolver: Captured answer for '{q_text[:30]}...' -> '{ans_text[:30]}...'")
-                except Exception as e:
+                except Exception:
                     pass
 
             page.on("response", handle_response)
             
             try:
-                if status_callback: await status_callback("🌐 Перехожу к тесту МЭШ...")
+                if status_callback: await status_callback("🌐 Перехожу к тесту...")
+                logger.info(f"MESH Solver: Loading {test_url}")
                 await page.goto(test_url, timeout=90000, wait_until="networkidle")
                 await asyncio.sleep(5)
                 
-                # Проверка на логин
                 current_url = page.url
-                if "login" in current_url or "auth" in current_url or await page.query_selector("form#login-form, .login-form, button:has-text('Войти')"):
+                logger.info(f"MESH Solver: Landed on {current_url}")
+                
+                # Проверка на логин
+                needs_auth = (
+                    ("login" in current_url or "auth" in current_url or "esia.gosuslugi.ru" in current_url or "edu-content/get-access" in current_url) and
+                    "oblakoz.ru" not in current_url and
+                    "preview" not in current_url and
+                    not await page.query_selector(".test-container, .question-text, .start-test, .player-start")
+                )
+                
+                if needs_auth:
+                    logger.info(f"Auth required. Redirected to {current_url}")
                     return "NEEDS_QR", None
+
+                # Проверка на уже решенный тест
+                res_elem = await page.query_selector(".result-score, .final-score, :has-text('Отметка'), :has-text('Результат'), :has-text('Баллы'), :has-text('выполнено за')")
+                if res_elem:
+                    res_text = await res_elem.inner_text()
+                    if "Отметка" in res_text or "решение" in res_text or "баллы" in res_text.lower():
+                        logger.info(f"Test already solved: {res_text}")
+                        screenshot_path = f"tmp/mesh_res_{user['user_id']}_{int(datetime.now().timestamp())}.png"
+                        await page.screenshot(path=screenshot_path)
+                        return f"✅ Задание уже выполнено!\n\nСтатус: <b>{res_text}</b>", screenshot_path
 
                 start_btn = await page.query_selector("button:has-text('Начать'), button:has-text('Приступить'), button:has-text('Пройти'), .start-btn")
                 if start_btn:
@@ -1103,7 +1168,7 @@ class ParserService:
                     await asyncio.sleep(3)
                 
                 q_num = 0
-                total_q = self.detected_total_q
+                total_q = local_total_q
                 
                 while True:
                     progress = min(1.0, q_num / max(1, total_q))
@@ -1122,7 +1187,7 @@ class ParserService:
                     q_num += 1
                     if q_num > 60: break
                     
-                    q_elem = await page.wait_for_selector(".question-text, .q-title, h3, .test-question, .task-text", timeout=15000)
+                    q_elem = await page.wait_for_selector(".question-text, .q-title, h3, .test-question, .task-text", timeout=30000)
                     if not q_elem: break
                         
                     question_text_raw = await q_elem.inner_text()

@@ -9,7 +9,7 @@ from aiogram.client.session.aiohttp import AiohttpSession
 from config import API_TOKEN, PID_FILE, PROXY_URL
 from database.db import Database
 from services.parser import ParserService, MosregAuthError
-from handlers import common, homework, solve, settings, profile
+from handlers import common, homework, solve, settings, profile, auth
 from utils.pid import create_pid_file, remove_pid_file
 
 # Logging setup
@@ -69,6 +69,7 @@ async def main():
 
     # Register Routers
     dp.include_router(common.router)
+    dp.include_router(auth.router)
     dp.include_router(homework.router)
     dp.include_router(solve.router)
     dp.include_router(settings.router)

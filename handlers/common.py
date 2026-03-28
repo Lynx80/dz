@@ -67,9 +67,9 @@ async def process_token_input(message: types.Message, state: FSMContext):
             f"✅ Авторизация успешна!\n"
             f"👤 Имя: {user_info['first_name']} {user_info['last_name']}\n"
             f"🏫 Класс: {user_info['grade']}\n\n"
-            "Теперь вы можете смотреть ДЗ и решать тесты!",
-            reply_markup=get_main_menu_kb()
+            "Теперь вы можете смотреть ДЗ и решать тесты!"
         )
+        await message.answer("Воспользуйтесь меню:", reply_markup=get_main_menu_kb())
         await state.clear()
         
     except MosregAuthError:
