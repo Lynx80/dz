@@ -59,6 +59,42 @@ async def solve_select_text_msg(message: types.Message, state: FSMContext):
         parse_mode="HTML"
     )
 
+@router.callback_query(F.data.startswith("solve_all_inline:"))
+async def solve_all_inline_cb(callback: types.CallbackQuery):
+    date_str = callback.data.split(":")[1]
+    await callback.message.answer(
+        "🧠 <b>МАССОВОЕ РЕШЕНИЕ ЦДЗ</b>\nВы выбрали решение всех доступных тестов на этот день.\n\n🎯 Выберите точность:",
+        reply_markup=get_solve_accuracy_kb("all", date_str),
+        parse_mode="HTML"
+    )
+    await callback.answer()
+
+@router.callback_query(F.data.startswith("solve_select_inline:"))
+async def solve_select_inline_cb(callback: types.CallbackQuery):
+    date_str = callback.data.split(":")[1]
+    user = await db.get_user(callback.from_user.id)
+    hw_list = await parser.get_mosreg_homework(user['token_mos'], user['student_id'], date_str, mesh_id=user.get('mesh_id'))
+    
+    # Фильтруем только те, где есть ссылка на тест
+    cdz_list = [h for h in hw_list if h.get('link') and ("test" in h['link'] or "exam" in h['link'] or "uchebnik" in h['link'])]
+    
+    if not cdz_list:
+        await callback.answer("❌ ЦДЗ не найдены", show_alert=True)
+        return
+
+    from aiogram.utils.keyboard import InlineKeyboardBuilder
+    builder = InlineKeyboardBuilder()
+    for hw in cdz_list:
+        builder.button(text=f"🧠 {hw['subject'][:20]}", callback_data=f"ai_select_subj:{hw['id']}:{date_str}")
+    builder.adjust(1)
+    
+    await callback.message.answer(
+        "🔍 <b>ВЫБОРОЧНОЕ РЕШЕНИЕ</b>\nВыберите предмет:",
+        reply_markup=builder.as_markup(),
+        parse_mode="HTML"
+    )
+    await callback.answer()
+
 # --- CALLBACK HANDLERS ---
 async def ai_select_subj_cb(callback: types.CallbackQuery):
     _, hw_id, date_str = callback.data.split(":")
