@@ -1,0 +1,36 @@
+{
+  "total_count": 1,
+  "response": [
+    {
+      "id": 22709824,
+      "source_id": "22709824",
+      "source": "EC",
+      "start_at": "2026-03-18T16:10:00+03:00",
+      "finish_at": "2026-03-18T16:50:00+03:00",
+      "room_name": "Кабинет музыки",
+      "room_number": "211",
+      "subject_name": "10 м медиаклуб",
+      "health_status": null,
+      "absence_reason_id": null,
+      "nonattendance_reason_id": null,
+      "homework": {
+        "presence_status_id": 2,
+        "total_count": 0,
+        "execute_count": 0,
+        "descriptions": [],
+        "materials": null
+      },
+      "marks": null,
+      "is_missed_lesson": false
+    }
+  ],
+  "errors": {
+    "PLAN": [
+      {
+        "error_code": "100",
+        "error_description": "Не удалось получить расписание уроков ОО",
+        "details": null
+      }
+    ]
+  }
+}
