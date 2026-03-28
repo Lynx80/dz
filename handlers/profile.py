@@ -1,44 +1,62 @@
-from aiogram import Router, types, F
-from database.db_service import get_user_profile, get_user_token
-from services.school_api import SchoolAPI
+from aiogram import Router, F, types
+from aiogram.fsm.context import FSMContext
+import logging
+
+from database.db import Database
+from services.parser import ParserService
+from keyboards.inline import get_profile_kb
+from keyboards.reply import get_main_menu_kb
 
 router = Router()
+db = Database()
+parser = ParserService()
+logger = logging.getLogger(__name__)
 
-@router.message(F.text == "👤 Профиль")
-async def show_profile(message: types.Message):
-    user = await get_user_profile(message.from_user.id)
-    if not user or not user["token"]:
-        await message.answer("⚠️ Вы не авторизованы. Перейдите в '⚙️ Настройки'.")
-        return
-
-    text = (
-        "👤 **Ваш профиль:**\n\n"
-        f"🔹 **Имя**: {user['first_name'] or 'Не загружено'}\n"
-        f"🔹 **Фамилия**: {user['last_name'] or 'Не загружено'}\n"
-        f"🔹 **Класс**: {user['class_name'] or 'Не загружено'}\n\n"
-        "💡 Нажмите '🔄 Обновить данные', если информация устарела."
-    )
-    await message.answer(text, parse_mode="Markdown")
-
-@router.message(F.text == "🔄 Обновить данные")
-async def refresh_data(message: types.Message):
-    token = await get_user_token(message.from_user.id)
-    if not token:
-        await message.answer("⚠️ Сначала введите токен в настройках.")
-        return
-
-    msg = await message.answer("🔄 Обновляю данные с портала...")
-    api = SchoolAPI(token)
-    profile = await api.get_profile()
+async def get_student_info(user_id):
+    user = await db.get_user(user_id)
+    stats = await db.get_stats(user_id)
     
-    if profile:
-        from database.db_service import update_user_profile
-        await update_user_profile(
-            message.from_user.id, 
-            profile["first_name"], 
-            profile["last_name"], 
-            profile["class_name"]
+    text = (
+        f"👤 <b>ПРОФИЛЬ ПОЛЬЗОВАТЕЛЯ</b>\n\n"
+        f"📝 Имя: {user.get('first_name', 'Не указано')} {user.get('last_name', '')}\n"
+        f"🏫 Класс: {user.get('grade', 'Не определен')}\n"
+        f"🆔 ID: <code>{user.get('student_id', '---')}</code>\n\n"
+        f"📊 <b>СТАТИСТИКА</b>\n"
+        f"✅ Решено тестов: {stats['solved']}\n"
+        f"📈 Ср. результат: {stats['avg']}%\n"
+        f"👁️ Отправлено ответов: {stats['saved']} (активаций)\n\n"
+        f"📅 Подписка: <b>Базовая (Бесплатно)</b>"
+    )
+    return text
+
+@router.message(F.text == "👤 ПРОФИЛЬ")
+async def show_profile(message: types.Message):
+    text = await get_student_info(message.from_user.id)
+    # Возвращаем стандартное меню, если зашли из расписания
+    await message.answer(text, reply_markup=get_main_menu_kb(), parse_mode="HTML")
+    await message.answer("👆 Управление профилем:", reply_markup=get_profile_kb(), parse_mode="HTML")
+
+@router.callback_query(F.data == "refresh_profile_data")
+async def refresh_profile_cb(callback: types.CallbackQuery):
+    user = await db.get_user(callback.from_user.id)
+    try:
+        new_info = await parser.fetch_mosreg_profile(user['token_mos'])
+        await db.update_user(
+            callback.from_user.id, 
+            first_name=new_info['first_name'],
+            last_name=new_info['last_name'],
+            grade=new_info['grade'],
+            student_id=new_info['student_id'],
+            mesh_id=new_info.get('mesh_id')
         )
-        await msg.edit_text("✅ Данные успешно обновлены!")
-    else:
-        await msg.edit_text("❌ Ошибка при обновлении. Проверьте актуальность токена.")
+        await callback.answer("✅ Данные обновлены")
+        await show_profile(callback.message)
+        await callback.message.delete()
+    except Exception as e:
+        await callback.answer(f"❌ Ошибка: {str(e)[:40]}")
+
+@router.callback_query(F.data == "delete_token_confirm")
+async def delete_token_cb(callback: types.CallbackQuery):
+    await db.update_user(callback.from_user.id, token_mos=None)
+    await callback.message.edit_text("🗑 Токен удален. Бот сброшен.\nВведите /start для новой авторизации.")
+    await callback.answer()
