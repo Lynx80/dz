@@ -216,12 +216,12 @@ def get_solve_final_mode_kb(task_id, accuracy, mins, date_str):
 
 def get_settings_kb(solve_delay=15, accuracy_mode="advanced"):
     builder = InlineKeyboardBuilder()
-    acc_text = {"modest": "70+%", "advanced": "80+%", "excellent": "90+%"}.get(accuracy_mode, "80+%")
+    acc_text = {"basic": "70+%", "advanced": "80+%", "perfect": "90+%"}.get(accuracy_mode, "80+%")
     builder.button(text=f"⏱ ВРЕМЯ РЕШЕНИЯ: {solve_delay} МИН", callback_data="set_speed_menu")
-    builder.button(text=f"🎯 ТОЧНОСТЬ: {acc_text}", callback_data="set_accuracy_menu")
+    builder.button(text=f"🎯 ТОЧНОСТЬ AI: {acc_text}", callback_data="set_accuracy_menu")
     builder.button(text="🔄 ОБНОВИТЬ ДАННЫЕ", callback_data="refresh_data")
     builder.button(text="💳 ПОДПИСКА", callback_data="subscription_info")
-    builder.button(text="🔙 ВЕРНУТЬСЯ В ГЛАВНОЕ МЕНЮ", callback_data="back_to_main")
+    builder.button(text="🔙 НАЗАД В МЕНЮ", callback_data="back_to_main")
     builder.adjust(1)
     return builder.as_markup()
 
@@ -245,10 +245,10 @@ def get_speed_kb(current_speed=15):
 
 def get_accuracy_kb(current_acc="advanced"):
     builder = InlineKeyboardBuilder()
-    modes = [("modest", "🥉 БАЗОВЫЙ (70+%)"), ("advanced", "🥈 СТАНДАРТ (80+%)"), ("excellent", "🥇 МАКСИМУМ (90+%)")]
+    modes = [("basic", "🥉 БАЗОВЫЙ (70+%)"), ("advanced", "🥈 СТАНДАРТ (80+%)"), ("perfect", "🥇 МАКСИМУМ (95+%)")]
     for m_id, m_text in modes:
         text = f"✅ {m_text}" if m_id == current_acc else m_text
-        if m_id == "advanced": text += " (ПО УМОЛЧАНИЮ)"
+        if m_id == "advanced" and m_id != current_acc: text += " (AUTO)"
         builder.button(text=text, callback_data=f"save_acc_{m_id}")
     builder.button(text="🔙 НАЗАД", callback_data="back_to_settings")
     builder.adjust(1)
