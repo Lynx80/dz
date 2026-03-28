@@ -82,9 +82,8 @@ async def show_day_homework(message, user_id, date_str, page=0, force_refresh=Fa
             else:
                 try:
                     await message.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
-                    await message.message.answer("📅 Меню обновлено", reply_markup=reply_kb)
                 except Exception:
-                    await message.message.answer(text, reply_markup=reply_kb)
+                    pass
             return
 
         # Обработка данных для отображения (если уроки есть)
@@ -236,16 +235,19 @@ async def show_day_homework(message, user_id, date_str, page=0, force_refresh=Fa
             except Exception:
                 pass # Если текст/кнопки не поменялись
             
-            # Решаем дилемму с кнопками снизу (чтобы не было спама, но кнопки обновлялись при смене даты)
-            # Мы обновляем нижнее меню только при ЯВНОМ выборе даты (manual_ / week_curr)
-            # В случаях hw_done (галочка), hw_page (листание) и refresh (обновление) - не спамим
+            # Решаем дилемму с кнопками снизу (чтобы не было спама)
+            # Мы обновляем нижнее меню только при ЯВНОМ выборе даты или если это первое сообщение
             silent_callbacks = ["hw_done:", "hw_page:", "refresh_hw_list:"]
-            if not any(x in message.data for x in silent_callbacks):
+            is_silent = any(x in (getattr(message, 'data', '') or '') for x in silent_callbacks)
+            
+            if not is_silent:
                 # Смена даты! Принудительно обновляем нижнее меню кнопок ("Решить все" и т.д.)
-                await message.message.answer("📅 Меню действий обновлено", reply_markup=reply_kb)
-            else:
-                # Нажатие на чекбокс или обновление — кнопки снизу менять не нужно
-                await message.answer("✅")
+                # Чтобы не было много спама, используем лаконичный текст
+                await message.message.answer("🗂️ Меню управления обновлено", reply_markup=reply_kb)
+            
+            if not isinstance(message, types.Message):
+                # Для колбэков всегда отвечаем "тихо" во всплывающем окне
+                await message.answer()
 
     except MosregAuthError:
         error_text = "⚠️ Ошибка: Токен устарел. Перезапустите бота /start."
