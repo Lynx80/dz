@@ -95,6 +95,27 @@ class Database:
                     timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
                 )
             """)
+
+            # Таблица Визуального кеша (хэш скриншота -> действия)
+            await db.execute("""
+                CREATE TABLE IF NOT EXISTS visual_cache (
+                    screenshot_hash TEXT PRIMARY KEY,
+                    actions_json TEXT,
+                    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+
+            # Таблица статусов решения задач (для Mini App поллинга)
+            await db.execute("""
+                CREATE TABLE IF NOT EXISTS solve_status (
+                    user_id INTEGER,
+                    test_url TEXT,
+                    status TEXT,
+                    progress INTEGER DEFAULT 0,
+                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (user_id, test_url)
+                )
+            """)
             await db.commit()
 
     async def get_user(self, user_id):
@@ -120,6 +141,32 @@ class Database:
         values.append(user_id)
         async with aiosqlite.connect(self.db_path) as db:
             await db.execute(f"UPDATE users SET {keys} WHERE user_id = ?", values)
+            await db.commit()
+
+    async def save_user_token(self, user_id, token, student_info):
+        """Saves or updates user token and student info (name, grade, etc.)."""
+        async with aiosqlite.connect(self.db_path) as db:
+            # Check if user exists
+            async with db.execute("SELECT 1 FROM users WHERE user_id = ?", (user_id,)) as cursor:
+                exists = await cursor.fetchone()
+            
+            first_name = student_info.get('first_name')
+            last_name = student_info.get('last_name')
+            grade = student_info.get('grade')
+            student_id = student_info.get('student_id')
+            mesh_id = student_info.get('mesh_id')
+
+            if exists:
+                await db.execute("""
+                    UPDATE users SET 
+                    token_mos = ?, student_id = ?, first_name = ?, last_name = ?, grade = ?, mesh_id = ?
+                    WHERE user_id = ?
+                """, (token, student_id, first_name, last_name, grade, mesh_id, user_id))
+            else:
+                await db.execute("""
+                    INSERT INTO users (user_id, token_mos, student_id, first_name, last_name, grade, mesh_id, solve_delay, accuracy_mode)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (user_id, token, student_id, first_name, last_name, grade, mesh_id, 15, 'advanced'))
             await db.commit()
 
     async def delete_user(self, user_id):
@@ -243,3 +290,40 @@ class Database:
             async with db.execute("SELECT user_id, token_mos FROM users WHERE token_mos IS NOT NULL") as cursor:
                 rows = await cursor.fetchall()
                 return [{"user_id": r[0], "token_mos": r[1]} for r in rows]
+
+    async def get_visual_cache(self, screenshot_hash):
+        async with aiosqlite.connect(self.db_path) as db:
+            async with db.execute("SELECT actions_json FROM visual_cache WHERE screenshot_hash = ?", (screenshot_hash,)) as cursor:
+                row = await cursor.fetchone()
+                return json.loads(row[0]) if row else None
+
+    async def set_visual_cache(self, screenshot_hash, actions):
+        actions_json = json.dumps(actions)
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute("""
+                INSERT OR REPLACE INTO visual_cache (screenshot_hash, actions_json)
+                VALUES (?, ?)
+            """, (screenshot_hash, actions_json))
+            await db.commit()
+
+    async def update_homework_status(self, user_id, test_url, status, progress=0):
+        """Обновляет статус и прогресс решения теста."""
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute("""
+                INSERT OR REPLACE INTO solve_status (user_id, test_url, status, progress, updated_at)
+                VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+            """, (user_id, test_url, status, progress))
+            await db.commit()
+
+    async def get_homework_status(self, user_id, test_url):
+        """Получает текущий статус решения теста."""
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute("""
+                SELECT status, progress FROM solve_status 
+                WHERE user_id = ? AND test_url = ?
+            """, (user_id, test_url)) as cursor:
+                row = await cursor.fetchone()
+                if row:
+                    return {"status": row['status'], "progress": row['progress']}
+                return {"status": "idle", "progress": 0}
