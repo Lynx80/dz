@@ -9,3 +9,7 @@ __pycache__/
 .vscode/
 .idea/
 archive/
+_dev/
+sessions/
+tmp/
+*.pid
